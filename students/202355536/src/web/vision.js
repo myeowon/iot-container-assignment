@@ -6,20 +6,21 @@ const MODEL = 'https://storage.googleapis.com/mediapipe-models/face_detector/bla
 
 const INTERVAL_MS = 5000;   // 5초마다 한 번 감지
 const INPUT_SIZE = 256;     // 모델에 넣을 정사각형 크기
+const MIN_SCORE = 0.4;      // 이 점수 이상이면 얼굴이 있다고 본다
 const WINDOW = 6;           // 최근 6번의 결과 중
 const THRESHOLD = 4;        // 4번 이상 같으면 상태를 바꾼다 (순간적인 오탐에 흔들리지 않게)
 
 /**
  * @param onChange(present: boolean)  상태가 바뀔 때만 호출
- * @param onSample(detected: boolean) 매 감지마다 호출 (표시등용)
+ * @param onSample({ detected, score, error }) 매 감지마다 호출 (표시등·점수 표시용)
  */
 export async function startPresence({ onChange, onSample }) {
   const { FilesetResolver, FaceDetector } = await import(`${MEDIAPIPE}/vision_bundle.mjs`);
   const fileset = await FilesetResolver.forVisionTasks(`${MEDIAPIPE}/wasm`);
   const detector = await FaceDetector.createFromOptions(fileset, {
     baseOptions: { modelAssetPath: MODEL, delegate: 'CPU' },
-    runningMode: 'VIDEO',
-    minDetectionConfidence: 0.4,
+    runningMode: 'IMAGE',          // 5초에 한 장씩 판정하므로 이미지 모드 (입력 크기가 달라도 된다)
+    minDetectionConfidence: 0.1,   // 낮은 점수도 받아서 화면에 보여 주고, 판정은 MIN_SCORE로 한다
   });
 
   const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 320, height: 240 }, audio: false });
@@ -40,12 +41,28 @@ export async function startPresence({ onChange, onSample }) {
   const history = [];
   let present = true;   // 공부 시작 직후에는 자리에 있다고 본다
 
+  const bestScore = (image) =>
+    Math.max(0, ...detector.detect(image).detections.map((d) => d.categories[0]?.score ?? 0));
+
+  /** 가운데 정사각형에서 먼저 찾고, 못 찾으면 전체 화면으로 한 번 더 */
+  function look() {
+    try {
+      const score = bestScore(centerSquare());
+      const best = score >= MIN_SCORE ? score : Math.max(score, bestScore(video));
+      return { detected: best >= MIN_SCORE, score: best };
+    } catch (err) {
+      console.error('[vision] 감지 오류', err);
+      return { detected: false, score: 0, error: err.message ?? String(err) };
+    }
+  }
+
   function sample() {
     if (video.readyState < 2) return;
-    const detected = detector.detectForVideo(centerSquare(), performance.now()).detections.length > 0;
+    const result = look();
+    const { detected } = result;
     history.push(detected);
     if (history.length > WINDOW) history.shift();
-    onSample?.(detected);
+    onSample?.(result);
 
     const hits = history.filter(Boolean).length;
     const misses = history.length - hits;

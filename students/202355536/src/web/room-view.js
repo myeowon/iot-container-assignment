@@ -71,7 +71,7 @@ export function mountRoom(root, ctx, roomId) {
       try {
         vision = await startPresence({
           onChange: (present) => change({ present }),
-          onSample: (detected) => hud.setDetected(detected),
+          onSample: (result) => hud.setDetected(result),
         });
         if (closed) return vision.stop();
         hud.setCamera(vision.video);

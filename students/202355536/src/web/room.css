@@ -93,6 +93,9 @@
 .camera video { width: 112px; height: 84px; object-fit: cover; border-radius: 12px; transform: scaleX(-1); border: 2px solid var(--glass-line); }
 .camera .led { position: absolute; top: 6px; right: 6px; width: 12px; height: 12px; border-radius: 50%; background: #6d6157; border: 2px solid #fff; }
 .camera.detected .led { background: #4caf50; }
+.camera { flex-direction: column; gap: 4px; }
+.camera-note { font-size: 0.72rem; white-space: nowrap; }
+.camera.detected .camera-note { color: #c9f0ad; }
 .camera.detected video { border-color: #8fd16a; }
 
 @media (max-width: 860px) {

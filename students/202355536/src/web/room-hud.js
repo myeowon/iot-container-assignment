@@ -11,6 +11,7 @@ export function createHud(on) {
   const subjectSelect = h('select', { 'aria-label': '지금 공부하는 과목', onChange: (e) => on.subject(e.target.value || null) });
   const controls = h('div', { class: 'controls' });
   const cameraBox = h('div', { class: 'camera' });
+  const cameraNote = h('small', { class: 'camera-note' });
   const musicBtn = h('button', { class: 'btn ghost small', onClick: on.music }, '🎵 lo-fi 켜기');
   const plannerBox = h('div', { class: 'planner compact' });
   const plannerPanel = h('aside', { class: 'panel left card' }, plannerBox);
@@ -85,11 +86,15 @@ export function createHud(on) {
     },
 
     setCamera(video, message) {
-      cameraBox.replaceChildren(...(video ? [video, h('i', { class: 'led' })] : message ? [h('small', {}, message)] : []));
+      cameraNote.textContent = video ? '얼굴을 찾는 중…' : '';
+      cameraBox.replaceChildren(...(video ? [video, h('i', { class: 'led' }), cameraNote] : message ? [h('small', {}, message)] : []));
     },
 
-    setDetected(detected) {
+    /** 5초마다 감지 결과: 표시등 + "얼굴 인식됨 · 87%" 처럼 점수까지 보여 준다 */
+    setDetected({ detected, score, error }) {
       cameraBox.classList.toggle('detected', detected);
+      cameraNote.textContent = error ? `감지 오류: ${error}`
+        : `${detected ? '얼굴 인식됨' : '얼굴이 안 보여요'} · ${Math.round(score * 100)}%`;
     },
 
     setMusic(playing) {
