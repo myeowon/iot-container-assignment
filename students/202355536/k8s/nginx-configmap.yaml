@@ -16,3 +16,9 @@ data:
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_read_timeout 30s;
     }
+
+    # 화면 코드는 배포할 때마다 바뀌므로 브라우저가 매번 변경 여부를 확인하게 한다 (안 바뀌었으면 304라 가볍다).
+    # 없으면 배포 후에도 예전 JS가 캐시에 남아 새 JS와 섞일 수 있다.
+    location ~* \.(html|js|css)$ {
+        add_header Cache-Control "no-cache";
+    }
