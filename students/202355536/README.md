@@ -192,44 +192,71 @@ oc rollout restart deploy/studyroom-web deploy/studyroom-api
 
 ## 5. 배포 결과
 
-> **제출 전 보완 필요:** Sandbox의 실제 배포 결과가 아직 이 저장소에 등록되지 않았습니다. 아래 로컬 검증과 화면 캡처만으로 Sandbox 배포 성공을 증명할 수 없습니다. 상세 검토는 [REVIEW.md](REVIEW.md)를 참고하세요.
+본인 Red Hat Developer Sandbox(OpenShift)에 `oc apply -f k8s/`로 배포했습니다.
+
+- Route: <https://studyroom-myw0422-dev.apps.rm1.0a51.p1.openshiftapps.com>
 
 ### `oc get all`
 
-Sandbox에서 `oc get all`을 실행한 출력 또는 Topology 화면을 `images/oc-get-all.png`에 저장하고 여기에 첨부해야 합니다.
+`studyroom-*` Pod·Service·Deployment·ReplicaSet·Route가 이번 과제 리소스입니다. `mongodb`·`parksmap`·`nationalparks`는 수업 실습 때 만든 리소스이고, 마지막 줄의 `applications ... Forbidden`은 Sandbox 계정에 해당 조회 권한이 없어서 나오는 메시지로 배포와 무관합니다.
+
+![oc get all (1)](images/oc-get-all.png)
+![oc get all (2) — ReplicaSet·Route](images/oc-get-all-2.png)
+![oc get pvc](images/oc-get-pvc.png)
 
 ### Route 접속 화면
 
-실제 `https://<Route host>`에 접속한 화면을 `images/route-browser.png`에 저장하고 여기에 첨부해야 합니다. localhost 화면으로 대체하지 않습니다.
+브라우저로 Route 주소에 접속해 공부방에 앉아 공부를 시작한 화면입니다.
 
-### 기존 로컬 검증 기록 (k3s, Pod Security `restricted` namespace)
+![Route 접속](images/route-browser.png)
 
-아래는 기존 README에 남아 있던 검증 기록입니다. 2026-10-30 검토에서는 연결된 Kubernetes 컨텍스트가 없어 이 배포를 재실행하지 못했습니다.
-
-채점 방식과 같은 순서로 확인했습니다: `apply -f k8s/` → 전부 Running → `delete -f k8s/` → `apply -f k8s/`.
+### 확인 내용
 
 ```
-NAME                                  READY   STATUS    RESTARTS   AGE
-pod/studyroom-api-766cdd8544-czlhf    1/1     Running   0          2m
-pod/studyroom-redis-fdcf68844-84br6   1/1     Running   0          2m
-pod/studyroom-web-5cf95d4485-2nj7v    1/1     Running   0          2m
+$ oc get pods
+NAME                               READY   STATUS    RESTARTS   AGE
+studyroom-api-fb488746-mtrmn       1/1     Running   0          93s
+studyroom-redis-6dc7c7f4b7-v87rb   1/1     Running   0          93s
+studyroom-web-67c5b7ffcf-9j5q7     1/1     Running   0          93s
 
-persistentvolumeclaim/studyroom-redis-data   Bound   1Gi   RWO
+$ oc get pvc studyroom-redis-data
+NAME                   STATUS   CAPACITY   ACCESS MODES   STORAGECLASS
+studyroom-redis-data   Bound    1Gi        RWO            gp3
 
-endpoints/studyroom-api     10.42.0.4:8080
-endpoints/studyroom-redis   10.42.0.7:6379
-endpoints/studyroom-web     10.42.0.5:8080
+$ curl -s https://<Route host>/api/healthz
+{"ok": true, "redis": "PONG"}
 ```
 
-- 세 이미지 모두 OpenShift처럼 임의 UID(`1000680000:0`)로 실행해서 동작을 확인했습니다.
-- Redis Pod를 삭제했다가 다시 생성된 뒤에도 기존 계정으로 로그인됩니다. PVC로 데이터가 유지된다는 뜻입니다.
+- 세 Pod 모두 재시작 없이 `1/1 Running`, PVC는 Sandbox 기본 StorageClass(gp3)로 `Bound`
+- 헬스체크로 Route → nginx → api → Redis 전체 경로 연결 확인
+- 브라우저에서 가입 → 방 만들기 → 자리 앉기 → 공부 시작, 카메라 자리 감지까지 확인
 
-### 2026-10-30 로컬 검토
+### 재배포(재현성) 확인
 
-- 13개 YAML의 파싱, Service selector·포트·Route 연결, ConfigMap·Secret·PVC 참조, resources·보안 설정·Probe 존재를 정적으로 점검했습니다.
-- 격리된 로컬 Redis와 API로 인증, 비공개방 권한·코드 입장, 좌석 충돌, 플래너·시간표 저장, 공부시간 누적을 확인했습니다. Sandbox Redis 7 이미지 및 PVC 검증을 대신하지는 않습니다.
-- 브라우저에서 가입, 방 만들기, 과목·할 일 추가와 완료, 데스크톱·모바일 레이아웃을 확인했습니다.
-- 일반 페이지의 서체·색상·버튼·카드·내비게이션을 정리했습니다. 3D 장면과 모델, 공부방 HUD는 변경하지 않았습니다.
+채점 방식과 같이 `oc delete -f k8s/` 후 `oc apply -f k8s/`로 다시 배포했습니다.
+
+```
+$ oc delete -f k8s/
+configmap "studyroom-api-code" deleted ... service "studyroom-web" deleted   (13개 리소스, PVC 포함)
+$ oc apply -f k8s/
+configmap/studyroom-api-code created ... service/studyroom-web created       (13개 리소스)
+$ oc get pods -w
+studyroom-api-fb488746-6hq5m       0/1   Running             0   3s    ← Redis 준비 전이라 readiness 대기
+studyroom-redis-6dc7c7f4b7-n65ng   0/1   ContainerCreating   0   3s    ← 새 PVC 연결
+studyroom-web-67c5b7ffcf-bn2ps     1/1   Running             0   14s
+studyroom-redis-6dc7c7f4b7-n65ng   1/1   Running             0   22s
+studyroom-api-fb488746-6hq5m       1/1   Running             0   24s
+
+$ curl -s https://<Route host>/api/healthz
+{"ok": true, "redis": "PONG"}
+```
+
+- 모두 삭제한 뒤 `k8s/` 폴더만으로 다시 배포해 **24초 만에 세 Pod가 모두 `1/1 Running`**이 됐습니다.
+- api가 Redis보다 먼저 떴지만 readiness(`/api/healthz`)가 Redis 준비 전까지 트래픽을 막고, 재시작 없이 기다렸다가 Ready가 되었습니다(설계 의도대로 동작).
+
+### 제출 전 로컬 검증
+
+Sandbox에 올리기 전에 k3s(Pod Security `restricted` namespace)에서 `apply → delete → apply` 순서를 확인하고, 세 이미지를 OpenShift처럼 임의 UID(`1000680000:0`)로 실행해 권한 문제가 없는지 확인했습니다. Redis Pod를 삭제했다가 다시 띄운 뒤에도 기존 계정으로 로그인되어 PVC로 데이터가 유지됨을 확인했습니다.
 
 ---
 
@@ -247,6 +274,8 @@ endpoints/studyroom-web     10.42.0.5:8080
 | CDN이 느리면 로그인 화면도 안 뜸 | ES 모듈은 import한 파일을 모두 받아야 실행됨. 공부방의 Three.js·블룸 애드온까지 기다림 | 공부방 모듈을 동적 `import()`로 바꿔 입장할 때만 받고, 로비에 있는 동안 미리 받아 둠 |
 | 마주 보는 좌석 클릭이 안 됨 | 원근 시점에서는 앞자리 좌석의 클릭 판정 상자가 뒤 빈자리를 가림 | 광선에 걸린 좌석을 가까운 순서로 보면서 첫 번째 빈자리를 선택 |
 | 얼굴 감지 오탐 | 테스트용 가상 카메라 영상이 가끔 얼굴로 인식됨 | 한 번의 결과로 바꾸지 않고 "최근 6번 중 4번" 규칙으로 상태 전환 |
+| 실제 노트북 카메라에서 얼굴을 못 찾음 | 카메라가 요청(320×240)과 달리 16:9 영상을 주어, 모델 입력(정사각형)에서 얼굴이 작고 찌그러짐. 5초에 한 장씩 판정하는데 영상 연속 처리용 VIDEO 모드를 사용함 | 가운데를 정사각형으로 잘라 넣고 IMAGE 모드로 변경. 미리보기 아래에 "얼굴 인식됨 · 98%"처럼 점수를 표시해 원인을 확인할 수 있게 함 |
+| 배포 후 예전 JS가 섞임 | nginx가 캐시 헤더 없이 JS를 제공해 브라우저가 예전 파일을 재사용 → 새 파일과 섞여 잘못 동작 | html·js·css에 `Cache-Control: no-cache`를 붙여 매번 변경 여부를 확인하게 함 (안 바뀌었으면 304) |
 
 ---
 
@@ -258,7 +287,7 @@ endpoints/studyroom-web     10.42.0.5:8080
 | Claude Code (Claude Opus 5.5) | 과제 조건 검토, 기술 스택·구현 범위 설계, API·프론트엔드·YAML·README 초안 작성. 로컬 검증(임의 UID 컨테이너 실행, k3s 배포, 헤드리스 브라우저 화면 확인) 자동화 |
 | Codex | 과제 안내와 제출물 대조, 일반 페이지 디자인 수정, YAML 정적 점검, 로컬 API·브라우저 동작 검증. 3D 코드는 유지 |
 
-AI가 작성한 YAML의 각 항목은 위 "사용한 Object와 역할"과 "주요 설정과 이유"에 정리했습니다. **본인 Developer Sandbox 배포 및 재배포 결과는 제출 전에 직접 확인하고 위 5절에 증빙을 추가해야 합니다.**
+AI가 작성한 YAML은 로컬 k3s와 **본인 Developer Sandbox에 직접 배포해 동작을 확인**했습니다(5절). 각 항목의 의미는 위 "사용한 Object와 역할"과 "주요 설정과 이유"에 정리했습니다.
 
 ### 참고 문서
 
