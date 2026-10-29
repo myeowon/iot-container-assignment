@@ -10,18 +10,13 @@ export function mountRooms(root, ctx) {
   const grid = h('div', { class: 'room-grid' });
   const dialog = createRoomDialog(ctx);
   const count = h('span', { class: 'room-count' }, '불러오는 중');
-  const live = h('span', { class: 'live-note', role: 'status' }, '공부방을 확인하고 있어요');
   let closed = false;
   let lastRooms = null;
-  const date = new Intl.DateTimeFormat('ko-KR', {
-    timeZone: 'Asia/Seoul', month: 'long', day: 'numeric', weekday: 'long',
-  }).format(new Date());
 
   shell.main.append(
     h('div', { class: 'page-head' },
-      h('div', {}, h('span', { class: 'eyebrow' }, date), h('h1', {}, '공부방'),
-        h('p', {}, '마음에 드는 방에 자리를 잡고, 오늘의 공부를 시작하세요.')),
-      h('button', { class: 'btn primary', onClick: () => dialog.open() }, '＋ 방 만들기')),
+      h('div', {}, h('h1', {}, '공부방'),
+        h('p', {}, '마음에 드는 방에 자리를 잡고, 오늘의 공부를 시작하세요.'))),
     h('div', { class: 'rooms-toolbar' },
       h('div', { class: 'rooms-heading' }, h('h2', {}, '열린 공부방'), count),
       h('div', { class: 'page-actions' },
@@ -32,7 +27,7 @@ export function mountRooms(root, ctx) {
             autocomplete: 'off', 'aria-label': '비공개방 코드', onInput: (e) => { e.target.value = e.target.value.toUpperCase(); } }),
           h('button', { class: 'btn', type: 'submit' }, '코드로 입장')))),
     grid,
-    h('div', { class: 'rooms-note' }, live, h('span', {}, '공개방은 누구나 · 비공개방은 초대 코드로')),
+    h('div', { class: 'rooms-foot' }, h('button', { class: 'btn primary', onClick: () => dialog.open() }, '＋ 방 만들기')),
     dialog.element);
 
   async function loadRooms() {
@@ -40,8 +35,6 @@ export function mountRooms(root, ctx) {
       const { rooms } = await get('/rooms');
       if (closed) return;
       count.textContent = String(rooms.length);
-      live.textContent = '실시간으로 업데이트 중';
-      live.classList.remove('offline');
       // 내용이 같으면 버튼을 다시 만들지 않아 키보드 포커스를 유지한다.
       const signature = JSON.stringify(rooms);
       if (signature !== lastRooms) {
@@ -51,8 +44,6 @@ export function mountRooms(root, ctx) {
     } catch (err) {
       if (closed) return;
       if (err.status === 401) ctx.logout();
-      live.textContent = '연결을 확인해 주세요 · 5초 후 다시 시도해요';
-      live.classList.add('offline');
       if (!grid.childElementCount) {
         count.textContent = '—';
         grid.replaceChildren(h('div', { class: 'empty-state' },
@@ -63,9 +54,8 @@ export function mountRooms(root, ctx) {
     }
   }
 
-  const roomCard = (r, index) => h('article', { class: `card room-card${r.count >= r.max ? ' full' : ''}` },
+  const roomCard = (r) => h('article', { class: `card room-card${r.count >= r.max ? ' full' : ''}` },
     h('div', { class: 'room-card-top' },
-      h('span', { class: 'room-number', 'aria-hidden': 'true' }, String(index + 1).padStart(2, '0')),
       h('span', { class: `badge${r.private ? ' private' : ''}` }, r.private ? '비공개' : '공개방')),
     h('h3', {}, r.name),
     h('div', { class: 'room-occupancy' },

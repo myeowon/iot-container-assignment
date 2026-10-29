@@ -306,7 +306,7 @@ data:
     export function mountCharacterPage(root, ctx) {
       const shell = mountShell(root, ctx, 'character');
       const stage = h('div', { class: 'preview-stage' }, h('p', { class: 'empty' }, '미리보기를 불러오는 중…'));
-      const info = h('div', { class: 'preview-info' });
+      const saveButton = h('button', { class: 'btn primary preview-save', onClick: save }, '이 캐릭터로 저장');
       const grid = h('div', { class: 'char-grid big' });
       let picked = ctx.user.character;
       let preview = null;
@@ -314,21 +314,15 @@ data:
 
       shell.main.append(
         h('div', { class: 'page-head' },
-          h('div', {}, h('span', { class: 'eyebrow' }, '공부방 속 나의 모습'), h('h1', {}, '캐릭터'),
+          h('div', {}, h('h1', {}, '캐릭터'),
             h('p', {}, '함께 공부할 친구를 고르고 저장해주세요.'))),
         h('div', { class: 'character-layout' },
-          h('section', { class: 'card preview-card' }, stage, info),
+          h('section', { class: 'card preview-card' }, h('div', { class: 'preview-frame' }, stage, saveButton)),
           h('section', { class: 'card stack' }, h('h2', {}, '내 캐릭터 고르기'), grid)));
 
       function draw() {
         const current = ctx.user.character;
-        const look = characterOf(picked);
-        fill(info,
-          h('h2', {}, `${look.emoji} ${look.label}`),
-          h('small', {}, picked === current ? '지금 쓰고 있는 캐릭터예요' : '미리보기 중이에요 · 저장하면 바뀌어요'),
-          h('div', { class: 'row' },
-            h('button', { class: 'btn ghost', onClick: random }, '랜덤 선택'),
-            h('button', { class: 'btn primary', disabled: picked === current, onClick: save }, '이 캐릭터로 저장')));
+        saveButton.hidden = picked === current;   // 바꿀 게 없으면 버튼을 숨긴다
         grid.replaceChildren(...CHARACTER_IDS.map((id) => {
           const c = CHARACTERS[id];
           return h('button', { class: `char${id === picked ? ' on' : ''}`, 'aria-pressed': String(id === picked), onClick: () => pick(id) },
@@ -342,11 +336,6 @@ data:
         picked = id;
         preview?.show(id);
         draw();
-      }
-
-      function random() {
-        const others = CHARACTER_IDS.filter((id) => id !== picked);
-        pick(others[Math.floor(Math.random() * others.length)]);
       }
 
       async function save() {
@@ -1222,7 +1211,7 @@ data:
 
       shell.main.append(
         h('div', { class: 'page-head' },
-          h('div', {}, h('span', { class: 'eyebrow' }, '하루를 쌓는 작은 습관'), h('h1', {}, '플래너'),
+          h('div', {}, h('h1', {}, '플래너'),
             h('p', {}, '오늘 할 일과 공부할 시간을 정리해보세요.'))),
         week,
         box);
@@ -2181,18 +2170,13 @@ data:
       const grid = h('div', { class: 'room-grid' });
       const dialog = createRoomDialog(ctx);
       const count = h('span', { class: 'room-count' }, '불러오는 중');
-      const live = h('span', { class: 'live-note', role: 'status' }, '공부방을 확인하고 있어요');
       let closed = false;
       let lastRooms = null;
-      const date = new Intl.DateTimeFormat('ko-KR', {
-        timeZone: 'Asia/Seoul', month: 'long', day: 'numeric', weekday: 'long',
-      }).format(new Date());
 
       shell.main.append(
         h('div', { class: 'page-head' },
-          h('div', {}, h('span', { class: 'eyebrow' }, date), h('h1', {}, '공부방'),
-            h('p', {}, '마음에 드는 방에 자리를 잡고, 오늘의 공부를 시작하세요.')),
-          h('button', { class: 'btn primary', onClick: () => dialog.open() }, '＋ 방 만들기')),
+          h('div', {}, h('h1', {}, '공부방'),
+            h('p', {}, '마음에 드는 방에 자리를 잡고, 오늘의 공부를 시작하세요.'))),
         h('div', { class: 'rooms-toolbar' },
           h('div', { class: 'rooms-heading' }, h('h2', {}, '열린 공부방'), count),
           h('div', { class: 'page-actions' },
@@ -2203,7 +2187,7 @@ data:
                 autocomplete: 'off', 'aria-label': '비공개방 코드', onInput: (e) => { e.target.value = e.target.value.toUpperCase(); } }),
               h('button', { class: 'btn', type: 'submit' }, '코드로 입장')))),
         grid,
-        h('div', { class: 'rooms-note' }, live, h('span', {}, '공개방은 누구나 · 비공개방은 초대 코드로')),
+        h('div', { class: 'rooms-foot' }, h('button', { class: 'btn primary', onClick: () => dialog.open() }, '＋ 방 만들기')),
         dialog.element);
 
       async function loadRooms() {
@@ -2211,8 +2195,6 @@ data:
           const { rooms } = await get('/rooms');
           if (closed) return;
           count.textContent = String(rooms.length);
-          live.textContent = '실시간으로 업데이트 중';
-          live.classList.remove('offline');
           // 내용이 같으면 버튼을 다시 만들지 않아 키보드 포커스를 유지한다.
           const signature = JSON.stringify(rooms);
           if (signature !== lastRooms) {
@@ -2222,8 +2204,6 @@ data:
         } catch (err) {
           if (closed) return;
           if (err.status === 401) ctx.logout();
-          live.textContent = '연결을 확인해 주세요 · 5초 후 다시 시도해요';
-          live.classList.add('offline');
           if (!grid.childElementCount) {
             count.textContent = '—';
             grid.replaceChildren(h('div', { class: 'empty-state' },
@@ -2234,9 +2214,8 @@ data:
         }
       }
 
-      const roomCard = (r, index) => h('article', { class: `card room-card${r.count >= r.max ? ' full' : ''}` },
+      const roomCard = (r) => h('article', { class: `card room-card${r.count >= r.max ? ' full' : ''}` },
         h('div', { class: 'room-card-top' },
-          h('span', { class: 'room-number', 'aria-hidden': 'true' }, String(index + 1).padStart(2, '0')),
           h('span', { class: `badge${r.private ? ' private' : ''}` }, r.private ? '비공개' : '공개방')),
         h('h3', {}, r.name),
         h('div', { class: 'room-occupancy' },
@@ -2555,8 +2534,7 @@ data:
             h('strong', {}, ctx.user.name), h('span', { class: 'caret' }, '▾')),
           menuOpen && h('div', { class: 'popover card' },
             h('div', { class: 'row' }, h('span', { class: 'avatar big', style: `--c:${me.color}` }, me.emoji),
-              h('div', {}, h('strong', {}, ctx.user.name), h('br'), h('small', {}, `@${ctx.user.username} · ${me.label}`))),
-            h('a', { class: 'btn small', href: '#/character' }, '캐릭터 바꾸기'),
+              h('div', {}, h('strong', {}, ctx.user.name), h('br'), h('small', {}, `@${ctx.user.username}`))),
             h('button', { class: 'btn ghost small', onClick: ctx.logout }, '로그아웃')));
       }
 
@@ -2953,7 +2931,6 @@ data:
     .char:hover { border-color: var(--leaf); }
     .char.on { border-color: var(--leaf); background: #eef7e8; }
     .popover .row { flex-wrap: nowrap; }
-    .popover a.btn { text-align: center; text-decoration: none; color: inherit; }
 
     /* ---------- 캐릭터 페이지 ---------- */
     .character-layout { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(280px, 1fr); gap: 20px; align-items: start; }
@@ -2963,7 +2940,6 @@ data:
       background: radial-gradient(circle at 50% 35%, #fffaf0 0, #f4ead8 70%);
     }
     .preview-stage canvas { display: block; }
-    .preview-info { display: flex; flex-direction: column; gap: 6px; }
     .char-grid.big { grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); }
     .char-grid.big .char { position: relative; padding: 16px 6px; }
     .char-grid.big .avatar.big { width: 64px; height: 64px; font-size: 2.1rem; }
@@ -3180,7 +3156,6 @@ data:
       border-radius: 2px 9px 2px 2px; background: #385b47; color: #fffefa;
       font: italic 25px Georgia, serif; padding-right: 2px; letter-spacing: -2px;
     }
-    .eyebrow { display: block; color: #798173; font-size: 12px; font-weight: 500; margin-bottom: 10px; letter-spacing: 0; }
 
     /* 로그인: 밤 도서관 3D 장면을 반투명하게 깔고, 카드는 왼쪽에 둔다. */
     .auth-page {
@@ -3215,13 +3190,13 @@ data:
     }
     .app-header .logo.small { font-size: 23px; }
     .app-header .nav-tabs { height: 78px; padding: 0; gap: 32px; border-radius: 0; background: none; align-items: stretch; }
-    .app-header .nav-tab { display: flex; align-items: center; padding: 0 3px; border-radius: 0; border-bottom: 2px solid transparent; font-size: 13px; }
+    .app-header .nav-tab { display: flex; align-items: center; padding: 0 3px; border-radius: 0; border-bottom: 2px solid transparent; font-size: 15px; }
     .app-header .nav-tab.on { color: var(--leaf); background: none; border-bottom-color: var(--leaf); box-shadow: none; font-weight: 650; }
     .app-header .header-right { gap: 20px; }
-    .app-header .today-chip { padding: 0; font-size: 12px; background: none; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
-    .app-header .profile-btn { border: 0; background: none; padding: 4px 0; gap: 8px; border-radius: 4px; font-size: 12px; }
+    .app-header .today-chip { padding: 0; font-size: 13px; background: none; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+    .app-header .profile-btn { border: 0; background: none; padding: 4px 0; gap: 8px; border-radius: 4px; font-size: 14px; }
     .app-header .profile-btn strong { max-width: 100px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
-    .app-header .avatar { width: 29px; height: 29px; font-size: 15px; }
+    .app-header .avatar { width: 28px; height: 28px; font-size: 15px; }
     .app-header .popover { width: 270px; box-shadow: 0 6px 20px #2d383114; }
 
     /* 페이지와 공부방 */
@@ -3239,10 +3214,10 @@ data:
     .page .code-input::placeholder { letter-spacing: 0; }
     .page .code-join .btn { padding: 8px 12px; }
     .page .room-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px; }
+    .rooms-foot { display: flex; justify-content: flex-end; margin-top: -8px; }
     .page .room-card { gap: 20px; min-width: 0; padding: 24px; border-top: 2px solid #81937a; border-radius: 3px; transition: border-color 150ms; }
     .page .room-card:hover { transform: none; border-color: #81937a; }
     .page .room-card.full { border-top-color: #c6c9bf; }
-    .room-number { color: #969b8b; font: italic 22px Georgia, serif; }
     .page .room-card h3 { font-size: 20px; font-weight: 600; letter-spacing: -0.04em; }
     .room-occupancy { display: flex; justify-content: space-between; gap: 12px; align-items: center; }
     .page .seats { gap: 6px; }
@@ -3253,10 +3228,6 @@ data:
     .page .room-card-foot { padding-top: 17px; border-top: 1px solid #e9eae1; gap: 4px; }
     .page .room-card-foot small { font-size: 11px; }
     .page .room-card-foot .btn { padding: 6px 9px; font-size: 11px; }
-    .rooms-note { display: flex; align-items: center; justify-content: space-between; gap: 14px; color: var(--muted); font-size: 11px; }
-    .live-note { display: flex; align-items: center; gap: 7px; }
-    .live-note::before { content: ''; width: 5px; height: 5px; border-radius: 50%; background: #698362; flex-shrink: 0; }
-    .live-note.offline::before { background: #ac7a48; }
     .page .empty-state { min-height: 290px; justify-content: center; border: 1px dashed #c9cfc0; background: transparent; box-shadow: none; }
     .page .empty-state h3 { margin-top: 18px; font-size: 17px; }
     .page .empty-state p { margin: 4px 0 18px; font-size: 13px; }
@@ -3332,11 +3303,13 @@ data:
     .page-planner .swatch.on { box-shadow: 0 0 0 2px var(--ink); }
 
     /* 캐릭터 미리보기의 3D 코드와 무대는 유지한다. */
-    .page-character .character-layout { gap: 24px; }
+    .page-character .character-layout { gap: 24px; align-items: stretch; }
     .page-character .character-layout > * { min-width: 0; }
-    .page-character .preview-stage { min-width: 0; width: 100%; }
-    .page-character .preview-info { gap: 10px; padding-top: 8px; }
-    .page-character .preview-info .row { margin-top: 6px; }
+    /* 미리보기는 오른쪽 블록 높이에 맞춰 늘어난다. 캔버스가 높이를 붙잡지 않게 절대 위치로 둔다. */
+    .page-character .preview-frame { position: relative; flex: 1; display: flex; min-height: 360px; }
+    .page-character .preview-stage { position: relative; flex: 1; min-width: 0; height: auto; }
+    .page-character .preview-stage canvas { position: absolute; inset: 0; }
+    .page-character .preview-save { position: absolute; right: 16px; bottom: 16px; }
     .page-character .char-grid.big { gap: 10px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
     .page-character .char { border-width: 1px; border-radius: 4px; gap: 10px; }
     .page-character .char.on { background: #edf0e7; border-color: #81937a; }
@@ -3362,6 +3335,7 @@ data:
       .page-planner .sheet-body { grid-template-columns: minmax(0, 1fr) 220px; }
       .page-planner .timetable { max-width: none; }
       .page-character .character-layout { grid-template-columns: 1fr; }
+      .page-character .preview-frame { min-height: 300px; }
       .auth-page { grid-template-columns: minmax(0, 360px); justify-content: center; }
       .auth-backdrop::after { background: rgb(12 13 22 / 0.35); }
       .auth-page .auth-card { padding: 26px; }
@@ -3376,14 +3350,12 @@ data:
       .page-head { padding-bottom: 24px; gap: 16px; }
       .page-head h1 { font-size: 29px; }
       .page-head p { font-size: 12px; }
-      .page-head .btn { padding: 9px 12px; }
       .rooms-toolbar { flex-wrap: wrap; gap: 16px; }
-      .rooms-toolbar .page-actions, .page .code-join { width: 100%; }
+      .rooms-toolbar .page-actions, .page .code-join, .rooms-foot .btn { width: 100%; }
       .page .code-input { flex: 1; width: 80px; min-width: 0; }
       .code-join label { font-size: 11px; white-space: nowrap; }
       .page .room-grid { grid-template-columns: 1fr; gap: 14px; }
       .page .room-card { padding: 22px; }
-      .rooms-note { align-items: flex-start; flex-direction: column; gap: 8px; }
       .page-planner .week { padding: 16px 10px; gap: 14px; align-items: stretch; }
       .page-planner .week > .sheet-label { padding-left: 6px; }
       .page-planner .week-bars { gap: 2px; }

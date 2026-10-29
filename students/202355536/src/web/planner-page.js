@@ -13,7 +13,7 @@ export function mountPlannerPage(root, ctx) {
 
   shell.main.append(
     h('div', { class: 'page-head' },
-      h('div', {}, h('span', { class: 'eyebrow' }, '하루를 쌓는 작은 습관'), h('h1', {}, '플래너'),
+      h('div', {}, h('h1', {}, '플래너'),
         h('p', {}, '오늘 할 일과 공부할 시간을 정리해보세요.'))),
     week,
     box);

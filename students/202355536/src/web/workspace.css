@@ -57,7 +57,6 @@ body:has(.auth-page) { background: #12131c; }
   border-radius: 2px 9px 2px 2px; background: #385b47; color: #fffefa;
   font: italic 25px Georgia, serif; padding-right: 2px; letter-spacing: -2px;
 }
-.eyebrow { display: block; color: #798173; font-size: 12px; font-weight: 500; margin-bottom: 10px; letter-spacing: 0; }
 
 /* 로그인: 밤 도서관 3D 장면을 반투명하게 깔고, 카드는 왼쪽에 둔다. */
 .auth-page {
@@ -92,13 +91,13 @@ body:has(.auth-page) { background: #12131c; }
 }
 .app-header .logo.small { font-size: 23px; }
 .app-header .nav-tabs { height: 78px; padding: 0; gap: 32px; border-radius: 0; background: none; align-items: stretch; }
-.app-header .nav-tab { display: flex; align-items: center; padding: 0 3px; border-radius: 0; border-bottom: 2px solid transparent; font-size: 13px; }
+.app-header .nav-tab { display: flex; align-items: center; padding: 0 3px; border-radius: 0; border-bottom: 2px solid transparent; font-size: 15px; }
 .app-header .nav-tab.on { color: var(--leaf); background: none; border-bottom-color: var(--leaf); box-shadow: none; font-weight: 650; }
 .app-header .header-right { gap: 20px; }
-.app-header .today-chip { padding: 0; font-size: 12px; background: none; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
-.app-header .profile-btn { border: 0; background: none; padding: 4px 0; gap: 8px; border-radius: 4px; font-size: 12px; }
+.app-header .today-chip { padding: 0; font-size: 13px; background: none; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.app-header .profile-btn { border: 0; background: none; padding: 4px 0; gap: 8px; border-radius: 4px; font-size: 14px; }
 .app-header .profile-btn strong { max-width: 100px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
-.app-header .avatar { width: 29px; height: 29px; font-size: 15px; }
+.app-header .avatar { width: 28px; height: 28px; font-size: 15px; }
 .app-header .popover { width: 270px; box-shadow: 0 6px 20px #2d383114; }
 
 /* 페이지와 공부방 */
@@ -116,10 +115,10 @@ body:has(.auth-page) { background: #12131c; }
 .page .code-input::placeholder { letter-spacing: 0; }
 .page .code-join .btn { padding: 8px 12px; }
 .page .room-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px; }
+.rooms-foot { display: flex; justify-content: flex-end; margin-top: -8px; }
 .page .room-card { gap: 20px; min-width: 0; padding: 24px; border-top: 2px solid #81937a; border-radius: 3px; transition: border-color 150ms; }
 .page .room-card:hover { transform: none; border-color: #81937a; }
 .page .room-card.full { border-top-color: #c6c9bf; }
-.room-number { color: #969b8b; font: italic 22px Georgia, serif; }
 .page .room-card h3 { font-size: 20px; font-weight: 600; letter-spacing: -0.04em; }
 .room-occupancy { display: flex; justify-content: space-between; gap: 12px; align-items: center; }
 .page .seats { gap: 6px; }
@@ -130,10 +129,6 @@ body:has(.auth-page) { background: #12131c; }
 .page .room-card-foot { padding-top: 17px; border-top: 1px solid #e9eae1; gap: 4px; }
 .page .room-card-foot small { font-size: 11px; }
 .page .room-card-foot .btn { padding: 6px 9px; font-size: 11px; }
-.rooms-note { display: flex; align-items: center; justify-content: space-between; gap: 14px; color: var(--muted); font-size: 11px; }
-.live-note { display: flex; align-items: center; gap: 7px; }
-.live-note::before { content: ''; width: 5px; height: 5px; border-radius: 50%; background: #698362; flex-shrink: 0; }
-.live-note.offline::before { background: #ac7a48; }
 .page .empty-state { min-height: 290px; justify-content: center; border: 1px dashed #c9cfc0; background: transparent; box-shadow: none; }
 .page .empty-state h3 { margin-top: 18px; font-size: 17px; }
 .page .empty-state p { margin: 4px 0 18px; font-size: 13px; }
@@ -209,11 +204,13 @@ body:has(.auth-page) { background: #12131c; }
 .page-planner .swatch.on { box-shadow: 0 0 0 2px var(--ink); }
 
 /* 캐릭터 미리보기의 3D 코드와 무대는 유지한다. */
-.page-character .character-layout { gap: 24px; }
+.page-character .character-layout { gap: 24px; align-items: stretch; }
 .page-character .character-layout > * { min-width: 0; }
-.page-character .preview-stage { min-width: 0; width: 100%; }
-.page-character .preview-info { gap: 10px; padding-top: 8px; }
-.page-character .preview-info .row { margin-top: 6px; }
+/* 미리보기는 오른쪽 블록 높이에 맞춰 늘어난다. 캔버스가 높이를 붙잡지 않게 절대 위치로 둔다. */
+.page-character .preview-frame { position: relative; flex: 1; display: flex; min-height: 360px; }
+.page-character .preview-stage { position: relative; flex: 1; min-width: 0; height: auto; }
+.page-character .preview-stage canvas { position: absolute; inset: 0; }
+.page-character .preview-save { position: absolute; right: 16px; bottom: 16px; }
 .page-character .char-grid.big { gap: 10px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .page-character .char { border-width: 1px; border-radius: 4px; gap: 10px; }
 .page-character .char.on { background: #edf0e7; border-color: #81937a; }
@@ -239,6 +236,7 @@ body:has(.auth-page) { background: #12131c; }
   .page-planner .sheet-body { grid-template-columns: minmax(0, 1fr) 220px; }
   .page-planner .timetable { max-width: none; }
   .page-character .character-layout { grid-template-columns: 1fr; }
+  .page-character .preview-frame { min-height: 300px; }
   .auth-page { grid-template-columns: minmax(0, 360px); justify-content: center; }
   .auth-backdrop::after { background: rgb(12 13 22 / 0.35); }
   .auth-page .auth-card { padding: 26px; }
@@ -253,14 +251,12 @@ body:has(.auth-page) { background: #12131c; }
   .page-head { padding-bottom: 24px; gap: 16px; }
   .page-head h1 { font-size: 29px; }
   .page-head p { font-size: 12px; }
-  .page-head .btn { padding: 9px 12px; }
   .rooms-toolbar { flex-wrap: wrap; gap: 16px; }
-  .rooms-toolbar .page-actions, .page .code-join { width: 100%; }
+  .rooms-toolbar .page-actions, .page .code-join, .rooms-foot .btn { width: 100%; }
   .page .code-input { flex: 1; width: 80px; min-width: 0; }
   .code-join label { font-size: 11px; white-space: nowrap; }
   .page .room-grid { grid-template-columns: 1fr; gap: 14px; }
   .page .room-card { padding: 22px; }
-  .rooms-note { align-items: flex-start; flex-direction: column; gap: 8px; }
   .page-planner .week { padding: 16px 10px; gap: 14px; align-items: stretch; }
   .page-planner .week > .sheet-label { padding-left: 6px; }
   .page-planner .week-bars { gap: 2px; }

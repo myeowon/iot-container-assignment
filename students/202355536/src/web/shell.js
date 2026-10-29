@@ -30,8 +30,7 @@ export function mountShell(root, ctx, active) {
         h('strong', {}, ctx.user.name), h('span', { class: 'caret' }, '▾')),
       menuOpen && h('div', { class: 'popover card' },
         h('div', { class: 'row' }, h('span', { class: 'avatar big', style: `--c:${me.color}` }, me.emoji),
-          h('div', {}, h('strong', {}, ctx.user.name), h('br'), h('small', {}, `@${ctx.user.username} · ${me.label}`))),
-        h('a', { class: 'btn small', href: '#/character' }, '캐릭터 바꾸기'),
+          h('div', {}, h('strong', {}, ctx.user.name), h('br'), h('small', {}, `@${ctx.user.username}`))),
         h('button', { class: 'btn ghost small', onClick: ctx.logout }, '로그아웃')));
   }
 

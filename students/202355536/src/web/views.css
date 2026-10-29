@@ -47,7 +47,6 @@
 .char:hover { border-color: var(--leaf); }
 .char.on { border-color: var(--leaf); background: #eef7e8; }
 .popover .row { flex-wrap: nowrap; }
-.popover a.btn { text-align: center; text-decoration: none; color: inherit; }
 
 /* ---------- 캐릭터 페이지 ---------- */
 .character-layout { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(280px, 1fr); gap: 20px; align-items: start; }
@@ -57,7 +56,6 @@
   background: radial-gradient(circle at 50% 35%, #fffaf0 0, #f4ead8 70%);
 }
 .preview-stage canvas { display: block; }
-.preview-info { display: flex; flex-direction: column; gap: 6px; }
 .char-grid.big { grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); }
 .char-grid.big .char { position: relative; padding: 16px 6px; }
 .char-grid.big .avatar.big { width: 64px; height: 64px; font-size: 2.1rem; }
