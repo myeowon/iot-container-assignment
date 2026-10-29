@@ -1,0 +1,16 @@
+# 클러스터 내부 전용 — web(nginx)이 /api 요청을 이 Service로 프록시
+apiVersion: v1
+kind: Service
+metadata:
+  name: studyroom-api
+  labels:
+    app: studyroom
+    component: api
+spec:
+  selector:
+    app: studyroom
+    component: api
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http

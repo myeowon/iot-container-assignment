@@ -1,0 +1,18 @@
+# 외부 공개 주소. host는 비워 두면 OpenShift가 자동 생성
+# 카메라(getUserMedia)는 HTTPS에서만 동작하므로 edge TLS + http→https 리다이렉트
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: studyroom
+  labels:
+    app: studyroom
+    component: web
+spec:
+  to:
+    kind: Service
+    name: studyroom-web
+  port:
+    targetPort: http
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect

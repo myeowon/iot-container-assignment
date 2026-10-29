@@ -1,0 +1,65 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: studyroom-redis
+  labels:
+    app: studyroom
+    component: redis
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate          # RWO PVC는 한 Pod만 붙을 수 있으므로 기존 Pod 종료 후 새로 생성
+  selector:
+    matchLabels:
+      app: studyroom
+      component: redis
+  template:
+    metadata:
+      labels:
+        app: studyroom
+        component: redis
+    spec:
+      containers:
+        - name: redis
+          image: quay.io/sclorg/redis-7-c9s:20250108
+          args: ["run-redis", "--appendonly", "yes"]   # 쓰기마다 AOF 기록 → PVC에 영구 저장
+          ports:
+            - name: redis
+              containerPort: 6379
+          env:
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: studyroom-secret
+                  key: REDIS_PASSWORD
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/redis/data
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", "redis-cli -a \"$REDIS_PASSWORD\" --no-auth-warning ping | grep -q PONG"]
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: redis
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: studyroom-redis-data

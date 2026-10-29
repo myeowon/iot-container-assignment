@@ -1,0 +1,71 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: studyroom-api
+  labels:
+    app: studyroom
+    component: api
+spec:
+  replicas: 1               # 방 상태 변경을 프로세스 내 Lock으로 직렬화하므로 1개
+  selector:
+    matchLabels:
+      app: studyroom
+      component: api
+  template:
+    metadata:
+      labels:
+        app: studyroom
+        component: api
+    spec:
+      containers:
+        - name: api
+          image: registry.access.redhat.com/ubi9/python-312:1
+          command: ["python3", "/opt/studyroom/api/server.py"]   # ConfigMap으로 주입한 코드 실행
+          ports:
+            - name: http
+              containerPort: 8080
+          envFrom:
+            - configMapRef:
+                name: studyroom-config
+            - secretRef:
+                name: studyroom-secret
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: PYTHONDONTWRITEBYTECODE
+              value: "1"
+          volumeMounts:
+            - name: code
+              mountPath: /opt/studyroom/api
+              readOnly: true
+          readinessProbe:           # Redis까지 연결돼야 트래픽 수신
+            httpGet:
+              path: /api/healthz
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          livenessProbe:            # 프로세스 생존만 확인 (Redis 장애로 재시작되지 않게 분리)
+            httpGet:
+              path: /api/livez
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 20
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
+      volumes:
+        - name: code
+          configMap:
+            name: studyroom-api-code

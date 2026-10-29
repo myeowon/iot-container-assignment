@@ -1,0 +1,12 @@
+# api 서버 설정값 (코드와 분리된 환경 설정)
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: studyroom-config
+  labels:
+    app: studyroom
+data:
+  PORT: "8080"
+  REDIS_HOST: "studyroom-redis"
+  REDIS_PORT: "6379"
+  COOKIE_SECURE: "1"

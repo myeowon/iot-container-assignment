@@ -1,0 +1,66 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: studyroom-web
+  labels:
+    app: studyroom
+    component: web
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: studyroom
+      component: web
+  template:
+    metadata:
+      labels:
+        app: studyroom
+        component: web
+    spec:
+      containers:
+        - name: web
+          image: registry.access.redhat.com/ubi9/nginx-124:1
+          command: ["nginx", "-g", "daemon off;"]   # 이미지 기본 CMD는 s2i 사용법 출력이라 직접 지정
+          ports:
+            - name: http
+              containerPort: 8080
+          volumeMounts:
+            - name: site
+              mountPath: /opt/app-root/src            # 정적 파일 (index.html, js, css)
+              readOnly: true
+            - name: proxy-conf
+              mountPath: /opt/app-root/etc/nginx.default.d   # 기본 server 블록에 포함되는 설정
+              readOnly: true
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 20m
+              memory: 32Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
+      volumes:
+        - name: site
+          configMap:
+            name: studyroom-web-files
+        - name: proxy-conf
+          configMap:
+            name: studyroom-nginx
