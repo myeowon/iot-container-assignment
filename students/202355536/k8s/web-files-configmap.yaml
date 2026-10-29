@@ -93,28 +93,52 @@ data:
     }
     addEventListener('hashchange', render);
     render();
+  auth-backdrop.js: |
+    // 로그인 화면 배경: 밤(22:30) 도서관에서 캐릭터들이 공부하는 모습만 보여 준다 (이름표·조작 없음)
+    const NIGHT = 22.5;
+    const SEATS = 8;
+
+    // 비워 둔 자리(2, 5)가 있어야 실제 공부방처럼 보인다
+    const DEMO = [
+      { seat: 0, character: 'bear', status: 'STUDYING', subjectColor: '#e76f51', books: ['#2a9d8f', '#e9c46a'] },
+      { seat: 1, character: 'cat-white', status: 'STUDYING', subjectColor: '#457b9d', books: ['#e76f51'] },
+      { seat: 3, character: 'dog', status: 'BREAK', books: ['#8ab17d', '#457b9d', '#e9c46a'] },
+      { seat: 4, character: 'rabbit', status: 'STUDYING', subjectColor: '#8ab17d', books: [] },
+      { seat: 6, character: 'cat-black', status: 'STUDYING', subjectColor: '#e9c46a', books: ['#e76f51', '#2a9d8f'] },
+      { seat: 7, character: 'bear', status: 'IDLE', books: ['#457b9d'] },
+    ].map((m) => ({ ...m, id: `demo-${m.seat}`, name: '' }));
+
+    /** 공부방 모듈(Three.js CDN)은 따로 받아서, 받는 동안에도 로그인 카드는 바로 쓸 수 있다 */
+    export function mountAuthBackdrop(container, { shiftX }) {
+      let scene = null;
+      let closed = false;
+      import('./scene.js')
+        .then(({ createScene }) => {
+          if (closed) return;
+          scene = createScene(container, { seatCount: SEATS, hours: NIGHT, shiftX });
+          scene.update(DEMO, null, false);
+          container.classList.add('ready');
+        })
+        .catch((err) => console.warn(err));   // 배경을 못 그려도 로그인은 된다
+      return () => {
+        closed = true;
+        scene?.destroy();
+      };
+    }
   auth-view.js: |
     // 로그인 / 간단 가입 화면 (캐릭터는 가입 시 랜덤, 로그인 후 상단에서 바꾼다)
     import { post } from './api.js';
+    import { mountAuthBackdrop } from './auth-backdrop.js';
     import { h, toast } from './ui.js';
 
     export function mountAuth(root, ctx) {
       let mode = 'login';
       const card = h('section', { class: 'card auth-card' });
 
-      root.append(h('main', { class: 'auth-page' },
-        h('a', { class: 'logo auth-brand', href: '#/login', 'aria-label': 'StudyPals 홈' },
-          h('span', { class: 'brand-mark', 'aria-hidden': 'true' }, 's'), 'StudyPals'),
-        h('div', { class: 'auth-hero' },
-          h('span', { class: 'eyebrow' }, '나의 온라인 도서관'),
-          h('h1', {}, '오늘 공부도', h('br'), '여기서 시작해요.'),
-          h('p', { class: 'auth-description' }, '조용한 도서관에 자리를 잡고, 오늘 할 일을 펼쳐보세요.',
-            h('br'), '같이 공부할 친구들이 기다리고 있어요.'),
-          h('ol', { class: 'hero-points' },
-            h('li', {}, h('span', {}, '01'), h('div', {}, h('strong', {}, '함께 앉는 공부방'), h('p', {}, '내 캐릭터로 입장하는 작은 3D 도서관'))),
-            h('li', {}, h('span', {}, '02'), h('div', {}, h('strong', {}, '차곡차곡 쌓이는 시간'), h('p', {}, '공부한 시간과 하루의 기록을 한곳에'))),
-            h('li', {}, h('span', {}, '03'), h('div', {}, h('strong', {}, '나만의 공부 계획'), h('p', {}, '과목별 할 일부터 10분 단위 시간표까지'))))),
-        card));
+      const backdrop = h('div', { class: 'auth-backdrop', 'aria-hidden': 'true' });
+      root.append(h('main', { class: 'auth-page' }, backdrop, card));
+      // 넓은 화면에서는 카드가 왼쪽을 가리므로 공부방을 오른쪽으로 민다
+      const unmountBackdrop = mountAuthBackdrop(backdrop, { shiftX: matchMedia('(min-width: 861px)').matches ? 0.16 : 0 });
 
       const field = (label, input) => h('label', { class: 'field' }, h('span', {}, label), input);
 
@@ -125,8 +149,7 @@ data:
           onClick: () => { mode = m; draw(); },
         }, label);
         card.replaceChildren(
-          h('div', { class: 'auth-card-heading' }, h('h2', {}, signup ? '첫 공부를 시작해볼까요?' : '다시 만나서 반가워요.'),
-            h('p', {}, signup ? '간단한 가입으로 내 자리를 만들어보세요.' : '로그인하고 오늘의 공부를 이어가세요.')),
+          h('span', { class: 'logo auth-brand' }, h('span', { class: 'brand-mark', 'aria-hidden': 'true' }, 's'), 'StudyPals'),
           h('div', { class: 'tabs' }, tab('login', '로그인'), tab('signup', '가입하기')),
           h('form', { class: 'stack', onSubmit: submit },
             field('아이디', h('input', { name: 'username', required: true, autocomplete: 'username',
@@ -155,6 +178,7 @@ data:
       }
 
       draw();
+      return unmountBackdrop;
     }
   base.css: |
     /* 공통: 색 토큰, 기본 요소, 버튼·입력·카드 같은 컴포넌트 */
@@ -2353,7 +2377,11 @@ data:
       return renderer;
     }
 
-    export function createScene(container, { seatCount, onSeatClick, onDaylight }) {
+    /**
+     * hours: 시각을 고정할 때 (없으면 실제 시각)
+     * shiftX: 장면을 화면 너비 대비 이만큼 오른쪽으로 민다 (왼쪽에 로그인 카드가 있을 때)
+     */
+    export function createScene(container, { seatCount, onSeatClick, onDaylight, hours, shiftX = 0 }) {
       if (!webglAvailable()) {
         container.append(Object.assign(document.createElement('p'), {
           className: 'empty', textContent: '이 브라우저는 WebGL을 지원하지 않아 3D 공부방을 표시할 수 없어요.',
@@ -2372,7 +2400,7 @@ data:
 
       /** 현재 시각의 하늘·빛을 장면에 적용한다 (1분마다) */
       function applyDaylight() {
-        const d = daylightAt(currentHours());
+        const d = daylightAt(hours ?? currentHours());
         room.sky.draw(d);
         // 창(-x) 바깥에서 들어오는 빛: 고도가 높을수록 위에서, 시간이 흐르면 z 방향으로 이동
         light.sun.position.set(-ROOM.width / 2 - 8, 2 + d.elevation * 14, (d.progress - 0.5) * 16);
@@ -2403,6 +2431,7 @@ data:
         const distance = Math.max(1, 1.55 / camera.aspect);
         camera.position.copy(CAMERA_TARGET).addScaledVector(CAMERA_POS.clone().sub(CAMERA_TARGET), distance);
         camera.lookAt(CAMERA_TARGET);
+        if (shiftX) camera.setViewOffset(w, h, -w * shiftX, 0, w, h);
         camera.updateProjectionMatrix();
         renderer.setSize(w, h);
         composer.setSize(w, h);
@@ -2425,7 +2454,7 @@ data:
       const onMove = (e) => { renderer.domElement.style.cursor = seatAt(e) != null ? 'pointer' : ''; };
       const onClick = (e) => {
         const seat = seatAt(e);
-        if (seat != null) onSeatClick(seat);
+        if (seat != null) onSeatClick?.(seat);
       };
       renderer.domElement.addEventListener('pointermove', onMove);
       renderer.domElement.addEventListener('click', onClick);
@@ -2877,15 +2906,7 @@ data:
   views.css: |
     /* 화면별 레이아웃: 로그인 · 상단 바 · 공부방 목록 · 플래너 (3D 공부방은 room.css) */
 
-    /* ---------- 로그인 ---------- */
-    .auth-page {
-      min-height: 100%;
-      display: grid; grid-template-columns: 1fr minmax(320px, 420px); gap: 40px;
-      align-items: center; max-width: 980px; margin: 0 auto; padding: 32px 16px;
-    }
-    .auth-hero p { font-size: 1.2rem; margin: 4px 0 18px; }
-    .hero-animals { font-size: 2.4rem; letter-spacing: 6px; }
-    .hero-points { padding-left: 20px; color: var(--muted); line-height: 2; }
+    /* ---------- 로그인 탭 ---------- */
     .tabs { display: flex; gap: 6px; margin-bottom: 16px; }
     .tab { flex: 1; padding: 10px; border: 0; border-radius: 12px; background: #f4ead8; font-family: var(--font-title); cursor: pointer; }
     .tab.on { background: var(--leaf); color: #fff; }
@@ -3003,9 +3024,8 @@ data:
 
     /* ---------- 좁은 화면 ---------- */
     @media (max-width: 860px) {
-      .auth-page, .planner-grid, .character-layout { grid-template-columns: 1fr; }
+      .planner-grid, .character-layout { grid-template-columns: 1fr; }
       .preview-stage { height: 300px; }
-      .auth-page { gap: 16px; }
       .app-header { grid-template-columns: 1fr auto; }
       .app-header .nav-tabs { grid-column: 1 / -1; grid-row: 2; justify-self: center; }
       .today-chip { display: none; }
@@ -3102,7 +3122,8 @@ data:
     }
   workspace.css: |
     /* 일반 페이지 전용. 3D 공부방(.room-screen)과 렌더러에는 적용하지 않는다. */
-    body:has(.auth-page, .app-header) { background: #f6f5f0; }
+    body:has(.app-header) { background: #f6f5f0; }
+    body:has(.auth-page) { background: #12131c; }
 
     :is(.auth-page, .app-header, .page) {
       --paper: #fffefa;
@@ -3161,25 +3182,26 @@ data:
     }
     .eyebrow { display: block; color: #798173; font-size: 12px; font-weight: 500; margin-bottom: 10px; letter-spacing: 0; }
 
-    /* 로그인: 여백과 구분선으로 구성한 도서관 안내 데스크. */
+    /* 로그인: 밤 도서관 3D 장면을 반투명하게 깔고, 카드는 왼쪽에 둔다. */
     .auth-page {
-      grid-template-columns: minmax(0, 1fr) 380px; grid-template-rows: auto 1fr;
-      column-gap: 100px; row-gap: 72px; max-width: 1096px; min-height: 100svh;
-      padding: 40px 32px 80px; align-content: start;
+      position: relative; isolation: isolate; overflow: hidden;
+      display: grid; grid-template-columns: minmax(0, 380px); align-content: center;
+      min-height: 100svh; padding: 40px clamp(24px, 8vw, 120px);
     }
-    .auth-brand { grid-column: 1 / -1; justify-self: start; }
-    .auth-hero { padding-bottom: 16px; }
-    .auth-hero h1 { font-size: clamp(32px, 3.6vw, 46px); letter-spacing: -0.06em; line-height: 1.4; font-weight: 650; }
-    .auth-hero .auth-description { margin: 24px 0 36px; font-size: 14px; color: var(--muted); line-height: 1.9; word-break: keep-all; }
-    .hero-points { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--line); }
-    .hero-points li { display: flex; gap: 20px; padding: 17px 0; border-bottom: 1px solid var(--line); }
-    .hero-points li > span { font: 14px/1.8 Georgia, serif; color: #a27b4e; }
-    .hero-points strong { font-size: 13px; font-weight: 600; color: var(--ink); }
-    .hero-points li p { margin: 2px 0 0; font-size: 12px; color: var(--muted); }
-    .auth-page .auth-card { padding: 32px; border-top: 3px solid var(--leaf); align-self: center; }
-    .auth-card-heading { margin-bottom: 28px; }
-    .auth-card-heading h2 { font-size: 20px; letter-spacing: -0.04em; }
-    .auth-card-heading p { font-size: 12px; color: var(--muted); margin: 8px 0 0; }
+    .auth-backdrop { position: absolute; inset: 0; z-index: -1; opacity: 0; transition: opacity 900ms ease; }
+    .auth-backdrop.ready { opacity: 0.72; }
+    .auth-backdrop canvas { display: block; }
+    .auth-backdrop .label-layer { display: none; }
+    /* 카드가 있는 왼쪽을 어둡게 눌러 장면이 카드와 겹쳐 보이지 않게 */
+    .auth-backdrop::after {
+      content: ''; position: absolute; inset: 0;
+      background: linear-gradient(90deg, rgb(12 13 22 / 0.75), rgb(12 13 22 / 0.2) 55%, rgb(12 13 22 / 0));
+    }
+    .auth-page .auth-card {
+      padding: 32px; border: 0; border-top: 3px solid var(--leaf);
+      background: rgb(255 254 250 / 0.94); backdrop-filter: blur(8px); box-shadow: 0 24px 60px rgb(0 0 0 / 0.35);
+    }
+    .auth-card .auth-brand { display: flex; justify-content: center; margin-bottom: 26px; }
     .auth-card .tabs { gap: 0; border-bottom: 1px solid var(--line); margin-bottom: 26px; }
     .auth-card .tab { padding: 10px 8px 12px; border-radius: 0; background: transparent; color: var(--muted); border-bottom: 2px solid transparent; margin-bottom: -1px; font-size: 13px; }
     .auth-card .tab.on { border-bottom-color: var(--leaf); background: transparent; color: var(--leaf); font-weight: 650; }
@@ -3323,7 +3345,6 @@ data:
     .page-character .char-grid.big .avatar.big { width: 48px; height: 48px; font-size: 27px; }
 
     @media (max-width: 1080px) {
-      .auth-page { column-gap: 56px; }
       .app-header { gap: 20px; }
       .app-header .header-right { gap: 12px; }
       .page .room-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -3341,16 +3362,12 @@ data:
       .page-planner .sheet-body { grid-template-columns: minmax(0, 1fr) 220px; }
       .page-planner .timetable { max-width: none; }
       .page-character .character-layout { grid-template-columns: 1fr; }
-      .auth-page { grid-template-columns: minmax(0, 1fr) 340px; column-gap: 32px; }
+      .auth-page { grid-template-columns: minmax(0, 360px); justify-content: center; }
+      .auth-backdrop::after { background: rgb(12 13 22 / 0.35); }
       .auth-page .auth-card { padding: 26px; }
-      .auth-description br { display: none; }
     }
     @media (max-width: 640px) {
-      .auth-page { grid-template-columns: 1fr; gap: 30px; padding: 24px 24px 48px; }
-      .auth-hero { padding: 0; }
-      .auth-hero h1 { font-size: 30px; }
-      .auth-hero .auth-description { margin: 16px 0 0; }
-      .auth-hero .hero-points { display: none; }
+      .auth-page { grid-template-columns: minmax(0, 1fr); align-content: end; padding: 24px 16px; }
       .auth-page .auth-card { padding: 24px; }
       .app-header { padding-inline: 20px; }
       .app-header .logo.small { font-size: 21px; }

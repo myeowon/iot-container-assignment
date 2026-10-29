@@ -100,7 +100,7 @@ flowchart LR
 | `redis-pvc.yaml` | PersistentVolumeClaim | studyroom-redis-data | Redis 데이터 영구 저장 (1Gi, RWO) |
 | `secret.yaml` | Secret | studyroom-secret | `REDIS_PASSWORD`, `SESSION_SECRET`(로그인 쿠키 HMAC 서명 키) |
 | `app-configmap.yaml` | ConfigMap | studyroom-config | api 설정값: Redis 주소·포트, 쿠키 Secure 여부 |
-| `web-files-configmap.yaml` | ConfigMap | studyroom-web-files | 프론트엔드 파일 31개 (`src/web/`에서 생성, 일반 화면 전용 `workspace.css` 포함) |
+| `web-files-configmap.yaml` | ConfigMap | studyroom-web-files | 프론트엔드 파일 32개 (`src/web/`에서 생성, 일반 화면 전용 `workspace.css` 포함) |
 | `nginx-configmap.yaml` | ConfigMap | studyroom-nginx | `/api` 프록시 설정 (`src/nginx/`에서 생성) |
 | `api-code-configmap.yaml` | ConfigMap | studyroom-api-code | API 서버 코드 8개 (`src/api/`에서 생성) |
 

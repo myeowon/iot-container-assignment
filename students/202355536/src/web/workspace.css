@@ -1,5 +1,6 @@
 /* 일반 페이지 전용. 3D 공부방(.room-screen)과 렌더러에는 적용하지 않는다. */
-body:has(.auth-page, .app-header) { background: #f6f5f0; }
+body:has(.app-header) { background: #f6f5f0; }
+body:has(.auth-page) { background: #12131c; }
 
 :is(.auth-page, .app-header, .page) {
   --paper: #fffefa;
@@ -58,25 +59,26 @@ body:has(.auth-page, .app-header) { background: #f6f5f0; }
 }
 .eyebrow { display: block; color: #798173; font-size: 12px; font-weight: 500; margin-bottom: 10px; letter-spacing: 0; }
 
-/* 로그인: 여백과 구분선으로 구성한 도서관 안내 데스크. */
+/* 로그인: 밤 도서관 3D 장면을 반투명하게 깔고, 카드는 왼쪽에 둔다. */
 .auth-page {
-  grid-template-columns: minmax(0, 1fr) 380px; grid-template-rows: auto 1fr;
-  column-gap: 100px; row-gap: 72px; max-width: 1096px; min-height: 100svh;
-  padding: 40px 32px 80px; align-content: start;
+  position: relative; isolation: isolate; overflow: hidden;
+  display: grid; grid-template-columns: minmax(0, 380px); align-content: center;
+  min-height: 100svh; padding: 40px clamp(24px, 8vw, 120px);
 }
-.auth-brand { grid-column: 1 / -1; justify-self: start; }
-.auth-hero { padding-bottom: 16px; }
-.auth-hero h1 { font-size: clamp(32px, 3.6vw, 46px); letter-spacing: -0.06em; line-height: 1.4; font-weight: 650; }
-.auth-hero .auth-description { margin: 24px 0 36px; font-size: 14px; color: var(--muted); line-height: 1.9; word-break: keep-all; }
-.hero-points { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--line); }
-.hero-points li { display: flex; gap: 20px; padding: 17px 0; border-bottom: 1px solid var(--line); }
-.hero-points li > span { font: 14px/1.8 Georgia, serif; color: #a27b4e; }
-.hero-points strong { font-size: 13px; font-weight: 600; color: var(--ink); }
-.hero-points li p { margin: 2px 0 0; font-size: 12px; color: var(--muted); }
-.auth-page .auth-card { padding: 32px; border-top: 3px solid var(--leaf); align-self: center; }
-.auth-card-heading { margin-bottom: 28px; }
-.auth-card-heading h2 { font-size: 20px; letter-spacing: -0.04em; }
-.auth-card-heading p { font-size: 12px; color: var(--muted); margin: 8px 0 0; }
+.auth-backdrop { position: absolute; inset: 0; z-index: -1; opacity: 0; transition: opacity 900ms ease; }
+.auth-backdrop.ready { opacity: 0.72; }
+.auth-backdrop canvas { display: block; }
+.auth-backdrop .label-layer { display: none; }
+/* 카드가 있는 왼쪽을 어둡게 눌러 장면이 카드와 겹쳐 보이지 않게 */
+.auth-backdrop::after {
+  content: ''; position: absolute; inset: 0;
+  background: linear-gradient(90deg, rgb(12 13 22 / 0.75), rgb(12 13 22 / 0.2) 55%, rgb(12 13 22 / 0));
+}
+.auth-page .auth-card {
+  padding: 32px; border: 0; border-top: 3px solid var(--leaf);
+  background: rgb(255 254 250 / 0.94); backdrop-filter: blur(8px); box-shadow: 0 24px 60px rgb(0 0 0 / 0.35);
+}
+.auth-card .auth-brand { display: flex; justify-content: center; margin-bottom: 26px; }
 .auth-card .tabs { gap: 0; border-bottom: 1px solid var(--line); margin-bottom: 26px; }
 .auth-card .tab { padding: 10px 8px 12px; border-radius: 0; background: transparent; color: var(--muted); border-bottom: 2px solid transparent; margin-bottom: -1px; font-size: 13px; }
 .auth-card .tab.on { border-bottom-color: var(--leaf); background: transparent; color: var(--leaf); font-weight: 650; }
@@ -220,7 +222,6 @@ body:has(.auth-page, .app-header) { background: #f6f5f0; }
 .page-character .char-grid.big .avatar.big { width: 48px; height: 48px; font-size: 27px; }
 
 @media (max-width: 1080px) {
-  .auth-page { column-gap: 56px; }
   .app-header { gap: 20px; }
   .app-header .header-right { gap: 12px; }
   .page .room-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -238,16 +239,12 @@ body:has(.auth-page, .app-header) { background: #f6f5f0; }
   .page-planner .sheet-body { grid-template-columns: minmax(0, 1fr) 220px; }
   .page-planner .timetable { max-width: none; }
   .page-character .character-layout { grid-template-columns: 1fr; }
-  .auth-page { grid-template-columns: minmax(0, 1fr) 340px; column-gap: 32px; }
+  .auth-page { grid-template-columns: minmax(0, 360px); justify-content: center; }
+  .auth-backdrop::after { background: rgb(12 13 22 / 0.35); }
   .auth-page .auth-card { padding: 26px; }
-  .auth-description br { display: none; }
 }
 @media (max-width: 640px) {
-  .auth-page { grid-template-columns: 1fr; gap: 30px; padding: 24px 24px 48px; }
-  .auth-hero { padding: 0; }
-  .auth-hero h1 { font-size: 30px; }
-  .auth-hero .auth-description { margin: 16px 0 0; }
-  .auth-hero .hero-points { display: none; }
+  .auth-page { grid-template-columns: minmax(0, 1fr); align-content: end; padding: 24px 16px; }
   .auth-page .auth-card { padding: 24px; }
   .app-header { padding-inline: 20px; }
   .app-header .logo.small { font-size: 21px; }

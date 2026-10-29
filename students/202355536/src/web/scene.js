@@ -45,7 +45,11 @@ function createRenderer(container) {
   return renderer;
 }
 
-export function createScene(container, { seatCount, onSeatClick, onDaylight }) {
+/**
+ * hours: 시각을 고정할 때 (없으면 실제 시각)
+ * shiftX: 장면을 화면 너비 대비 이만큼 오른쪽으로 민다 (왼쪽에 로그인 카드가 있을 때)
+ */
+export function createScene(container, { seatCount, onSeatClick, onDaylight, hours, shiftX = 0 }) {
   if (!webglAvailable()) {
     container.append(Object.assign(document.createElement('p'), {
       className: 'empty', textContent: '이 브라우저는 WebGL을 지원하지 않아 3D 공부방을 표시할 수 없어요.',
@@ -64,7 +68,7 @@ export function createScene(container, { seatCount, onSeatClick, onDaylight }) {
 
   /** 현재 시각의 하늘·빛을 장면에 적용한다 (1분마다) */
   function applyDaylight() {
-    const d = daylightAt(currentHours());
+    const d = daylightAt(hours ?? currentHours());
     room.sky.draw(d);
     // 창(-x) 바깥에서 들어오는 빛: 고도가 높을수록 위에서, 시간이 흐르면 z 방향으로 이동
     light.sun.position.set(-ROOM.width / 2 - 8, 2 + d.elevation * 14, (d.progress - 0.5) * 16);
@@ -95,6 +99,7 @@ export function createScene(container, { seatCount, onSeatClick, onDaylight }) {
     const distance = Math.max(1, 1.55 / camera.aspect);
     camera.position.copy(CAMERA_TARGET).addScaledVector(CAMERA_POS.clone().sub(CAMERA_TARGET), distance);
     camera.lookAt(CAMERA_TARGET);
+    if (shiftX) camera.setViewOffset(w, h, -w * shiftX, 0, w, h);
     camera.updateProjectionMatrix();
     renderer.setSize(w, h);
     composer.setSize(w, h);
@@ -117,7 +122,7 @@ export function createScene(container, { seatCount, onSeatClick, onDaylight }) {
   const onMove = (e) => { renderer.domElement.style.cursor = seatAt(e) != null ? 'pointer' : ''; };
   const onClick = (e) => {
     const seat = seatAt(e);
-    if (seat != null) onSeatClick(seat);
+    if (seat != null) onSeatClick?.(seat);
   };
   renderer.domElement.addEventListener('pointermove', onMove);
   renderer.domElement.addEventListener('click', onClick);
