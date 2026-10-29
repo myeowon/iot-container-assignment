@@ -15,7 +15,7 @@ const HEARTBEAT_MS = 3000;
 const KICK_OUT = [401, 403, 404, 409];
 
 export function mountRoom(root, ctx, roomId) {
-  const state = { seat: null, running: false, onBreak: false, mode: 'manual', present: true };
+  const state = { seat: null, running: false, onBreak: false, mode: 'manual', present: true, taskId: null };
   let me = { totalSec: 0 };
   let syncedAt = 0;
   let scene = null;
@@ -50,6 +50,7 @@ export function mountRoom(root, ctx, roomId) {
   const planner = createPlanner(hud.plannerBox, {
     compact: true,
     onChange: () => beat(),   // 책상 위 책 더미(남은 할 일) 갱신
+    onPick: (taskId) => change({ taskId }),   // 지금 하는 일 → 이름표·공부시간 과목
   });
   planner.load();
 
@@ -95,7 +96,7 @@ export function mountRoom(root, ctx, roomId) {
     inflight = true;
     try {
       const res = await post(`/rooms/${roomId}/heartbeat`, {
-        seat: state.seat, status: status(),
+        seat: state.seat, status: status(), taskId: state.taskId,
       });
       if (closed) return;
       if (res.seatTaken) {
@@ -130,6 +131,7 @@ export function mountRoom(root, ctx, roomId) {
   function renderTimer() {
     const sinceSync = status() === 'STUDYING' && syncedAt ? (performance.now() - syncedAt) / 1000 : 0;
     hud.renderTimer(me.totalSec + sinceSync);
+    planner.checkNow();
   }
 
   const leaveBeacon = () => navigator.sendBeacon(`/api/rooms/${roomId}/leave`);

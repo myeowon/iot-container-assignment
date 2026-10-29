@@ -7,7 +7,7 @@ const HOURS = Array.from({ length: 24 }, (_, i) => (i + 6) % 24);
 const ACTUAL_MIN_SEC = 300;
 const ERASER = '';
 
-const slotNow = () => {
+export const slotNow = () => {
   const now = new Date();
   return Math.floor((now.getHours() * 60 + now.getMinutes()) / 10);
 };

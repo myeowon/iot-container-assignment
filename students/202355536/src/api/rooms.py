@@ -145,17 +145,17 @@ def heartbeat(req, rid):
             status = "IDLE"   # 자리에 앉아야 공부를 시작할 수 있다
 
         t = now()
-        plan = current_plan(req.uid)
-        # 과목을 따로 고르지 않았으면 시간표의 지금 계획 과목으로 공부시간을 쌓는다
-        subject_id = optional(b.get("subjectId"), str) or (plan and plan["subjectId"])
+        # 지금 하는 일로 고른 할 일의 과목, 없으면 시간표의 지금 계획 과목으로 공부시간을 쌓는다
+        plan = current_plan(req.uid, optional(b.get("taskId"), str))
+        subject_id = plan and plan["subjectId"]
         if prev:
             add_study(req.uid, prev, t)
         members[req.uid] = {
             "seat": seat, "status": status, "ts": t,
             "subjectId": subject_id,
-            "subjectColor": optional(b.get("subjectColor"), "color") or (plan and plan["color"]),
+            "subjectColor": plan and plan["color"],
             "name": req.user["name"], "character": character_of(req.user),
-            "plan": plan,   # 지금 시각의 계획 → 이름표 아래에 표시
+            "plan": plan,   # 지금 하는 과목·할 일 → 이름표 아래에 표시
             "books": desk_books(req.uid),
         }
         db.hset(f"presence:{rid}", {req.uid: json.dumps(members[req.uid], ensure_ascii=False)})

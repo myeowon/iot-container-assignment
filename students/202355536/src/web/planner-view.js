@@ -1,16 +1,20 @@
 // 플래너: 과목 → 할 일(과목별 백로그) → 그날의 플래너
 // 기본(플래너 페이지): 종이 플래너 시트(planner-sheet.js, 지난 날짜는 읽기 전용) + 과목 관리 카드
-// compact 모드(공부방): 오늘 목록 + 백로그에서 추가
+// compact 모드(공부방): 플래너 페이지에서 오늘로 담은 할 일만. 할 일을 누르면 '지금 하는 일'로 고른다
+//   (고르지 않으면 시간표에서 지금 계획한 과목을 위로·강조)
 import { del, get, patch, post, put } from './api.js';
 import { plannerSheet } from './planner-sheet.js';
-import { SUBJECT_COLORS, fill, fmtDate, fmtShort, h, swatches, toast } from './ui.js';
+import { slotNow } from './timetable.js';
+import { SUBJECT_COLORS, fmtDate, fmtShort, h, swatches, toast } from './ui.js';
 
-export function createPlanner(container, { compact = false, onChange } = {}) {
+export function createPlanner(container, { compact = false, onChange, onPick } = {}) {
   let data = null;
   let newSubjectColor = SUBJECT_COLORS[0];
   let focusSubject = null;          // 할 일 추가 후 같은 입력창에 다시 포커스
   const openSubjects = new Set();
-  const progress = h('div', { class: 'progress' });
+  let plannedNow = null;            // compact: 시간표에서 지금 시각에 계획한 과목 → 강조
+  let pickedId = null;              // compact: 지금 하는 일로 고른 할 일
+  const subjectTimes = new Map();   // compact: 과목 id → 과목 이름 옆 오늘 공부시간 표시
   const colorBox = h('div');        // 색만 다시 그려서 입력 중인 과목 이름을 지키기
   const drawColors = () => colorBox.replaceChildren(
     swatches(SUBJECT_COLORS, newSubjectColor, (c) => { newSubjectColor = c; drawColors(); }));
@@ -18,6 +22,7 @@ export function createPlanner(container, { compact = false, onChange } = {}) {
   const subjectOf = (id) => data.subjects.find((s) => s.id === id);
   const taskOf = (id) => data.tasks.find((t) => t.id === id);
   const dayIds = () => data.day.taskIds;
+  const planned = () => data.day.timetable[slotNow()] ?? null;
 
   async function act(request) {
     try {
@@ -29,6 +34,8 @@ export function createPlanner(container, { compact = false, onChange } = {}) {
 
   function apply(next) {
     data = next;
+    // 고른 할 일이 오늘 목록에서 빠졌거나 끝났으면 고르기를 푼다
+    if (pickedId && !(dayIds().includes(pickedId) && !taskOf(pickedId)?.done)) pick(null);
     draw();
     onChange?.(data);
   }
@@ -44,46 +51,57 @@ export function createPlanner(container, { compact = false, onChange } = {}) {
 
   // ---------- 오늘의 플래너 (공부방 compact) ----------
 
-  function drawProgress() {
-    const goal = data.day.goalMin * 60;
-    const studied = data.study.totalSec;
-    const ratio = goal ? Math.min(1, studied / goal) : 0;
-    const bySubject = Object.entries(data.study.bySubject).filter(([id]) => subjectOf(id));
-    fill(progress,
-      h('div', { class: 'bar' }, h('span', { style: `width:${ratio * 100}%` })),
-      h('small', {}, `${fmtShort(studied)} / 목표 ${fmtShort(goal)}`),
-      bySubject.length > 0 && h('div', { class: 'subject-times' }, bySubject.map(([id, sec]) =>
-        h('span', { class: 'chip', style: `--c:${subjectOf(id).color}` }, h('i', { class: 'dot' }), `${subjectOf(id).name} ${fmtShort(sec)}`))));
+  /** 과목 이름 옆 오늘 공부시간 (하트비트마다 글자만 바꾼다) */
+  function drawSubjectTimes() {
+    for (const [id, el] of subjectTimes) el.textContent = fmtShort(data.study.bySubject[id] ?? 0);
   }
 
   function daySection() {
     const tasks = dayIds().map(taskOf).filter(Boolean);
     const done = tasks.filter((t) => t.done).length;
     const empty = !data.editable ? '이 날은 담아 둔 할 일이 없어요'
-      : compact ? '아래에서 과목의 할 일을 골라 추가해요' : '과목의 할 일에서 ＋오늘을 눌러 오늘 목록을 채워요';
+      : compact ? '플래너 페이지에서 ＋오늘로 할 일을 담아요' : '과목의 할 일에서 ＋오늘을 눌러 오늘 목록을 채워요';
     return h('div', { class: 'today' },
-      h('div', { class: 'row between' },
-        h('h3', {}, `${data.editable ? '오늘' : '그날'} 할 일 ${done}/${tasks.length}`),
-        h('label', { class: 'goal' }, '목표',
-          h('input', { type: 'number', min: 0, max: 1440, step: 10, value: data.day.goalMin, disabled: !data.editable,
-            onChange: (e) => act(put('/daily', { goalMin: Number(e.target.value) })) }),
-          '분')),
-      progress,
-      tasks.length ? h('ul', { class: 'tasks' }, tasks.map((t) => taskRow(t, { inDay: true }))) : h('p', { class: 'empty' }, empty),
+      h('h3', {}, `${data.editable ? '오늘' : '그날'} 할 일 ${done}/${tasks.length}`),
+      tasks.length > 0 && data.editable && h('small', { class: 'pick-hint' }, '할 일을 누르면 지금 하는 일로 정해져요'),
+      tasks.length ? subjectGroups(tasks) : h('p', { class: 'empty' }, empty),
       !data.editable && h('small', {}, '지난 기록은 볼 수만 있어요'));
   }
 
+  /** 오늘 할 일을 과목별로 묶는다. 시간표에서 지금 계획한 과목을 맨 위에 두고 강조한다. */
+  function subjectGroups(tasks) {
+    const groups = new Map();
+    for (const t of tasks) groups.set(t.subjectId, [...(groups.get(t.subjectId) ?? []), t]);
+    // 지금 하는 과목(고른 할 일의 과목, 없으면 시간표 계획)을 맨 위로
+    const current = pickedId ? taskOf(pickedId).subjectId : plannedNow;
+    const order = [...groups].sort(([a], [b]) => (b === current) - (a === current));
+    subjectTimes.clear();
+    return h('div', { class: 'day-groups' }, order.map(([subjectId, list]) => {
+      const subject = subjectOf(subjectId);
+      const now = !pickedId && subjectId === plannedNow;
+      const time = h('span', { class: 'subject-time' });
+      subjectTimes.set(subjectId, time);
+      return h('div', { class: `day-group${now ? ' now' : ''}`, style: `--c:${subject?.color}` },
+        h('div', { class: 'day-subject' }, h('i', { class: 'dot' }), subject?.name, time,
+          now && h('span', { class: 'now-badge' }, '지금 계획')),
+        h('ul', { class: 'tasks' }, list.map((t) => taskRow(t, { inDay: true }))));
+    }));
+  }
+
   function taskRow(t, { inDay }) {
-    const subject = subjectOf(t.subjectId);
     const inToday = data.editable && dayIds().includes(t.id);
     const readOnly = inDay && !data.editable;
-    return h('li', { class: `task${t.done ? ' done' : ''}` },
+    const picked = t.id === pickedId;
+    return h('li', { class: `task${t.done ? ' done' : ''}${picked ? ' picked' : ''}` },
       h('input', { type: 'checkbox', checked: t.done, disabled: readOnly, onChange: () => toggleDone(t), 'aria-label': '완료' }),
-      inDay && h('i', { class: 'dot', style: `--c:${subject?.color}`, title: subject?.name }),
-      h('span', { class: 'title' }, t.title),
+      compact && !t.done
+        ? h('button', { class: 'title task-pick', 'aria-pressed': String(picked),
+          title: picked ? '눌러서 고르기 풀기' : '지금 하는 일로 고르기', onClick: () => { pick(picked ? null : t.id); draw(); } },
+          t.title, picked && h('span', { class: 'now-badge' }, '지금 하는 중'))
+        : h('span', { class: 'title' }, t.title),
       inDay
-        ? !readOnly && h('button', { class: 'icon', title: '오늘 목록에서 빼기',
-          onClick: () => setToday(dayIds().filter((id) => id !== t.id)) }, '↩')
+        ? !readOnly && h('button', { class: 'icon', title: '오늘 할 일에서 빼기', 'aria-label': '오늘 할 일에서 빼기',
+          onClick: () => setToday(dayIds().filter((id) => id !== t.id)) }, '✕')
         // 지난 날짜를 보는 중에는 오늘 목록을 모르므로 ＋오늘을 숨긴다
         : data.editable && !t.done && h('button', { class: `chip-btn${inToday ? ' on' : ''}`, disabled: inToday,
           onClick: () => setToday([...dayIds(), t.id]) }, inToday ? '오늘 ✓' : '＋오늘'),
@@ -144,31 +162,23 @@ export function createPlanner(container, { compact = false, onChange } = {}) {
     if (confirm(`'${s.name}' 과목과 할 일을 모두 삭제할까요?`)) act(del(`/subjects/${s.id}`));
   }
 
-  // ---------- 백로그에서 추가 (compact) ----------
-
-  function backlogPicker() {
-    const select = h('select', { 'aria-label': '추가할 할 일' },
-      h('option', { value: '' }, '과목의 할 일 고르기'),
-      data.subjects.map((s) => {
-        const left = data.tasks.filter((t) => t.subjectId === s.id && !t.done && !dayIds().includes(t.id));
-        return left.length && h('optgroup', { label: s.name },
-          left.map((t) => h('option', { value: t.id }, t.title)));
-      }));
-    return h('div', { class: 'row backlog' }, select,
-      h('button', { class: 'btn small', onClick: () => select.value && setToday([...dayIds(), select.value]) }, '추가'));
+  function pick(id) {
+    pickedId = id;
+    onPick?.(id);
   }
 
   function draw() {
     if (compact) {
+      plannedNow = planned();
       container.replaceChildren(
         h('div', { class: 'planner-head' }, h('h2', {}, '오늘의 플래너'), h('small', {}, fmtDate(data.day.date))),
-        daySection(), backlogPicker());
+        daySection());
     } else {
       container.replaceChildren(h('div', { class: 'planner-grid' },
         plannerSheet(data, sheetActions),
         h('section', { class: 'card planner' }, subjectsSection())));
     }
-    drawProgress();
+    drawSubjectTimes();
     drawColors();
     focusSubject = null;
   }
@@ -177,11 +187,15 @@ export function createPlanner(container, { compact = false, onChange } = {}) {
     /** date(YYYYMMDD)를 주면 그날 기록, 없으면 오늘 */
     load,
     get data() { return data; },
-    /** 공부방 하트비트로 받은 오늘 공부시간을 진행 막대에만 반영 */
+    /** 공부방: 시간표의 지금 과목이 바뀌면(10분 칸 경계) 강조를 다시 그린다 */
+    checkNow() {
+      if (data && compact && planned() !== plannedNow) draw();
+    },
+    /** 공부방 하트비트로 받은 오늘 공부시간을 과목 이름 옆에만 반영 */
     setStudy(study) {
       if (!data) return;
       data.study = study;
-      drawProgress();
+      drawSubjectTimes();
     },
   };
 }

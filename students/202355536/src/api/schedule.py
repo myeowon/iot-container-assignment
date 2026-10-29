@@ -38,14 +38,17 @@ def put_dday(req):
         return planner.view(req.uid, p)
 
 
-def current_plan(uid):
-    """지금 시각 칸에 계획된 과목과, 오늘 목록에서 그 과목의 아직 안 끝난 첫 할 일 → 공부방 이름표"""
+def current_plan(uid, task_id=None):
+    """공부방 이름표: 지금 하는 일로 고른 할 일(오늘 목록에 있을 때)과 그 과목.
+    고르지 않았으면 지금 시각 칸에 계획된 과목과, 오늘 목록에서 그 과목의 아직 안 끝난 첫 할 일."""
     p, d = planner.load(uid), planner.load_daily(uid)
-    subject = next((s for s in p["subjects"] if s["id"] == d["timetable"].get(str(slot_of()))), None)
+    tasks = {t["id"]: t for t in p["tasks"]}
+    picked = tasks.get(task_id) if task_id in d["taskIds"] else None
+    subject_id = picked["subjectId"] if picked else d["timetable"].get(str(slot_of()))
+    subject = next((s for s in p["subjects"] if s["id"] == subject_id), None)
     if not subject:
         return None
-    tasks = {t["id"]: t for t in p["tasks"]}
-    task = next((tasks[i] for i in d["taskIds"]
-                 if i in tasks and tasks[i]["subjectId"] == subject["id"] and not tasks[i]["done"]), None)
+    task = picked or next((tasks[i] for i in d["taskIds"]
+                           if i in tasks and tasks[i]["subjectId"] == subject["id"] and not tasks[i]["done"]), None)
     return {"subjectId": subject["id"], "name": subject["name"], "color": subject["color"],
             "task": task["title"] if task else None}
