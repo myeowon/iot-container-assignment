@@ -254,6 +254,10 @@ $ curl -s https://<Route host>/api/healthz
 - 모두 삭제한 뒤 `k8s/` 폴더만으로 다시 배포해 **24초 만에 세 Pod가 모두 `1/1 Running`**이 됐습니다.
 - api가 Redis보다 먼저 떴지만 readiness(`/api/healthz`)가 Redis 준비 전까지 트래픽을 막고, 재시작 없이 기다렸다가 Ready가 되었습니다(설계 의도대로 동작).
 
+![재배포 후 Pod 목록 (웹 콘솔)](images/redeploy-pods.png)
+
+- 웹 콘솔에서도 재배포된 세 Pod(이름이 위 출력과 같음)가 모두 Running·재시작 0으로 확인됩니다. Pod당 메모리 약 10~12MiB, CPU는 거의 0으로 Sandbox 할당량 대비 가볍게 동작합니다.
+
 ### 제출 전 로컬 검증
 
 Sandbox에 올리기 전에 k3s(Pod Security `restricted` namespace)에서 `apply → delete → apply` 순서를 확인하고, 세 이미지를 OpenShift처럼 임의 UID(`1000680000:0`)로 실행해 권한 문제가 없는지 확인했습니다. Redis Pod를 삭제했다가 다시 띄운 뒤에도 기존 계정으로 로그인되어 PVC로 데이터가 유지됨을 확인했습니다.
