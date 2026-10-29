@@ -1,0 +1,114 @@
+/* 공통: 색 토큰, 기본 요소, 버튼·입력·카드 같은 컴포넌트 */
+:root {
+  --bg: #fbf4e6;
+  --paper: #fffdf7;
+  --ink: #4a3f35;
+  --muted: #8c7d6c;
+  --line: #eadcc4;
+  --leaf: #7fb069;
+  --leaf-dark: #5a8f4e;
+  --peach: #f4a261;
+  --sky: #cfe8f3;
+  --radius: 18px;
+  --shadow: 0 6px 0 #e6d6bb, 0 10px 24px rgba(120, 95, 60, 0.12);
+  --font-title: 'Jua', system-ui, sans-serif;
+  --font-body: 'Gowun Dodum', system-ui, sans-serif;
+  --font-hand: 'Gaegu', 'Gowun Dodum', system-ui, sans-serif;
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body {
+  background: radial-gradient(circle at 20% 0%, #fff7e8 0, var(--bg) 55%) fixed;
+  color: var(--ink);
+  font: 15px/1.5 var(--font-body);
+}
+h1, h2, h3 { font-family: var(--font-title); font-weight: 400; margin: 0; }
+h2 { font-size: 1.35rem; }
+h3 { font-size: 1.05rem; }
+small { color: var(--muted); }
+button, input, select { font: inherit; color: inherit; }
+
+input, select {
+  width: 100%;
+  padding: 10px 12px;
+  border: 2px solid var(--line);
+  border-radius: 12px;
+  background: #fff;
+  outline: none;
+}
+input:focus, select:focus { border-color: var(--leaf); }
+input[type='checkbox'] { width: 18px; height: 18px; accent-color: var(--leaf-dark); flex: none; }
+input[type='range'] { width: 90px; padding: 0; border: 0; accent-color: var(--leaf-dark); }
+
+.btn {
+  padding: 10px 18px;
+  border: 0;
+  border-radius: 999px;
+  background: #f1e6d2;
+  font-family: var(--font-title);
+  cursor: pointer;
+  box-shadow: 0 3px 0 #dccaa9;
+  transition: transform 0.1s;
+  white-space: nowrap;
+}
+.btn:active { transform: translateY(2px); box-shadow: 0 1px 0 #dccaa9; }
+.btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.btn.primary { background: var(--leaf); color: #fff; box-shadow: 0 3px 0 var(--leaf-dark); }
+.btn.ghost { background: transparent; box-shadow: none; border: 2px solid var(--line); }
+.btn.small { padding: 6px 12px; font-size: 0.9rem; }
+.icon { border: 0; background: none; cursor: pointer; color: var(--muted); padding: 2px 6px; border-radius: 8px; }
+.icon:hover { background: #f4ead8; }
+
+.card {
+  background: var(--paper);
+  border: 2px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 18px;
+}
+.stack { display: flex; flex-direction: column; gap: 12px; }
+.row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.row.between { justify-content: space-between; }
+.empty { color: var(--muted); text-align: center; margin: 8px 0; }
+.label { color: var(--muted); min-width: 36px; }
+
+.chip, .badge {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 4px 12px;
+  border-radius: 999px;
+  background: #f4ead8;
+  font-family: var(--font-title);
+  font-size: 0.9rem;
+  border: 0;
+}
+.badge.private { background: #ffe1d1; cursor: pointer; }
+.chip-btn {
+  border: 2px solid var(--line); background: #fff; border-radius: 999px;
+  padding: 2px 10px; font-size: 0.8rem; cursor: pointer; white-space: nowrap;
+}
+.chip-btn.on { background: #e7f3df; border-color: var(--leaf); color: var(--leaf-dark); }
+
+.seg {
+  border: 2px solid var(--line); background: #fff; border-radius: 999px;
+  padding: 6px 14px; cursor: pointer; font-family: var(--font-title);
+}
+.seg.on { background: var(--leaf); border-color: var(--leaf); color: #fff; }
+
+.swatches { display: flex; gap: 6px; flex-wrap: wrap; }
+.swatch {
+  width: 26px; height: 26px; border-radius: 50%;
+  background: var(--c); border: 3px solid #fff; box-shadow: 0 0 0 2px var(--line); cursor: pointer;
+}
+.swatch.on { box-shadow: 0 0 0 3px var(--ink); }
+.dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: var(--c); flex: none; }
+
+.logo { font-family: var(--font-title); font-size: 3rem; color: var(--leaf-dark); letter-spacing: 2px; }
+.logo.small { font-size: 1.6rem; }
+
+#toast {
+  position: fixed; left: 50%; bottom: 28px; transform: translate(-50%, 20px);
+  background: var(--ink); color: #fff; padding: 10px 18px; border-radius: 999px;
+  opacity: 0; pointer-events: none; transition: 0.25s; z-index: 100; max-width: calc(100% - 32px);
+}
+#toast.show { opacity: 1; transform: translate(-50%, 0); }
