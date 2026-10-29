@@ -1196,146 +1196,79 @@ data:
       return g;
     }
   planner-page.js: |
-    // 플래너 페이지: 최근 7일 공부시간 막대 + 종이 플래너 시트 + 과목·할 일 관리
-    import { get } from './api.js';
+    // 플래너 페이지: 오늘의 플래너 시트 + 과목·할 일 관리
     import { createPlanner } from './planner-view.js';
     import { mountShell } from './shell.js';
-    import { fmtDate, fmtShort, h } from './ui.js';
+    import { h } from './ui.js';
 
     export function mountPlannerPage(root, ctx) {
       const shell = mountShell(root, ctx, 'planner');
-      const week = h('div', { class: 'card week' });
       const box = h('div');
-      let days = [];
-      let selected = null;
 
       shell.main.append(
         h('div', { class: 'page-head' },
           h('div', {}, h('h1', {}, '플래너'),
             h('p', {}, '오늘 할 일과 공부할 시간을 정리해보세요.'))),
-        week,
         box);
 
       const planner = createPlanner(box, {
-        onChange: (d) => {
-          selected = d.day.date;
-          if (d.editable) shell.setToday(d.study.totalSec);
-          loadWeek();
-        },
+        onChange: (d) => shell.setToday(d.study.totalSec),
       });
-
-      /** 최근 7일: 막대 높이 = 공부시간 (가장 많이 한 날 기준), 누르면 그날 기록 */
-      async function loadWeek() {
-        try {
-          days = (await get('/planner/history')).days;
-        } catch {
-          return;
-        }
-        const max = Math.max(3600, ...days.map((d) => d.totalSec));
-        week.replaceChildren(
-          h('div', { class: 'sheet-label' }, '최근 7일'),
-          h('div', { class: 'week-bars' }, days.map((d) => h('button', {
-            class: `week-day${d.date === selected ? ' on' : ''}`, title: `${fmtDate(d.date)} · 할 일 ${d.done}/${d.planned}`,
-            onClick: () => planner.load(d.date),
-          },
-          h('span', { class: 'week-bar' }, h('i', { style: `height:${(d.totalSec / max) * 100}%` })),
-          h('strong', {}, fmtShort(d.totalSec)),
-          h('small', {}, fmtDate(d.date))))));
-      }
 
       planner.load();
       return () => shell.destroy();
     }
   planner-sheet.js: |
-    // 종이 플래너 한 장: TODAY'S(날짜 이동) · D-DAY · TOTAL TIME · 오늘의 한마디 · CONTENTS · TIMETABLE
+    // 플래너 한 장: 오늘 날짜 · 목표/공부한 시간 · TODO(과목별 할 일) · TIMETABLE
     import { timetable } from './timetable.js';
-    import { fmtDate, fmtShort, h, shiftDate } from './ui.js';
+    import { fmtShort, h } from './ui.js';
 
-    const MONTHS = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
-    const DAY_MS = 86_400_000;
-
-    /** 1 → 1st, 2 → 2nd, 11 → 11th, 23 → 23rd */
-    function ordinal(n) {
-      if (n % 100 >= 11 && n % 100 <= 13) return `${n}th`;
-      return n + ({ 1: 'st', 2: 'nd', 3: 'rd' }[n % 10] ?? 'th');
-    }
-
-    const parts = (ymd) => [Number(ymd.slice(0, 4)), Number(ymd.slice(4, 6)), Number(ymd.slice(6, 8))];
-    const toInputDate = (ymd) => ymd.replace(/(\d{4})(\d{2})(\d{2})/, '$1-$2-$3');
-
-    /** 20261030 → "OCT. 30th" */
-    function paperDate(ymd) {
-      const [, month, day] = parts(ymd);
-      return `${MONTHS[month - 1]}. ${ordinal(day)}`;
-    }
-
-    /** 기준 날짜에서 D-DAY까지: "D-12" / "D-DAY" / "D+3" */
-    function ddayText(target, from) {
-      const utc = (ymd) => { const [y, m, d] = parts(ymd); return Date.UTC(y, m - 1, d); };
-      const days = Math.round((utc(target) - utc(from)) / DAY_MS);
-      return days === 0 ? 'D-DAY' : days > 0 ? `D-${days}` : `D+${-days}`;
+    /** 20261030 → "10월 30일 금요일" */
+    function longDate(ymd) {
+      const [y, m, d] = [ymd.slice(0, 4), ymd.slice(4, 6), ymd.slice(6, 8)].map(Number);
+      const weekday = '일월화수목금토'[new Date(y, m - 1, d).getDay()];
+      return `${m}월 ${d}일 ${weekday}요일`;
     }
 
     /**
      * @param data    GET /api/planner 응답
-     * @param actions { load(date), toggleDone(task), saveDaily(patch), saveTimetable(cells), saveDday(title, date) }
+     * @param actions { toggleDone(task), saveDaily(patch), saveTimetable(cells) }
      */
     export function plannerSheet(data, actions) {
       const { day, editable } = data;
       const subjectOf = (id) => data.subjects.find((s) => s.id === id);
+      const goal = day.goalMin * 60;
+      const studied = data.study.totalSec;
 
       const dateBox = h('div', { class: 'sheet-box sheet-date' },
-        h('div', { class: 'sheet-label' }, "TODAY'S"),
-        h('div', { class: 'date-nav' },
-          h('button', { class: 'icon', title: '전날', onClick: () => actions.load(shiftDate(day.date, -1)) }, '◀'),
-          h('strong', { class: 'hand big' }, paperDate(day.date)),
-          h('button', { class: 'icon', title: '다음 날', disabled: editable, onClick: () => actions.load(shiftDate(day.date, 1)) }, '▶')),
-        h('small', {}, editable ? `오늘 · ${fmtDate(day.date)}` : `지난 기록 · ${fmtDate(day.date)}`),
-        !editable && h('button', { class: 'chip-btn', onClick: () => actions.load() }, '오늘로'));
+        h('div', { class: 'sheet-label' }, day.date.slice(0, 4)),
+        h('strong', { class: 'hand big' }, longDate(day.date)));
 
-      const ddayBox = h('details', { class: 'sheet-box sheet-dday' },
-        h('summary', {},
-          h('div', { class: 'sheet-label' }, 'D-DAY'),
-          h('strong', { class: 'hand big' }, data.dday ? ddayText(data.dday.date, day.date) : '－'),
-          h('small', {}, data.dday?.title ?? '눌러서 설정')),
-        h('form', { class: 'stack', onSubmit: (e) => {
-          e.preventDefault();
-          const f = new FormData(e.target);
-          actions.saveDday(f.get('title'), String(f.get('date')).replaceAll('-', ''));
-        } },
-        h('input', { name: 'title', placeholder: '예: 정보처리기사', maxLength: 20, value: data.dday?.title ?? '' }),
-        h('input', { name: 'date', type: 'date', value: data.dday ? toInputDate(data.dday.date) : '' }),
-        h('button', { class: 'btn small', type: 'submit' }, '저장 (이름을 비우면 해제)')));
-
-      const goal = day.goalMin * 60;
-      const totalBox = h('div', { class: 'sheet-box sheet-total' },
-        h('div', { class: 'sheet-label' }, 'TOTAL TIME'),
-        h('strong', { class: 'hand big' }, fmtShort(data.study.totalSec)),
-        h('label', { class: 'goal' }, '목표',
-          h('input', { type: 'number', min: 0, max: 1440, step: 10, value: day.goalMin, disabled: !editable,
-            onChange: (e) => actions.saveDaily({ goalMin: Number(e.target.value) }) }), '분'),
+      const timeBox = h('div', { class: 'sheet-box sheet-total' },
+        h('div', { class: 'time-pair' },
+          h('div', {},
+            h('div', { class: 'sheet-label' }, '목표 시간'),
+            h('label', { class: 'goal' },
+              h('input', { type: 'number', min: 0, max: 1440, step: 10, value: day.goalMin, disabled: !editable,
+                'aria-label': '목표 시간(분)', onChange: (e) => actions.saveDaily({ goalMin: Number(e.target.value) }) }), '분')),
+          h('div', {},
+            h('div', { class: 'sheet-label' }, '공부한 시간'),
+            h('strong', { class: 'hand big' }, fmtShort(studied)))),
         h('div', { class: 'progress' }, h('div', { class: 'bar' },
-          h('span', { style: `width:${goal ? Math.min(100, (data.study.totalSec / goal) * 100) : 0}%` }))));
+          h('span', { style: `width:${goal ? Math.min(100, (studied / goal) * 100) : 0}%` }))));
 
-      const memo = h('label', { class: 'sheet-memo' },
-        h('span', { class: 'sheet-label' }, '오늘의 한마디'),
-        h('input', { class: 'hand', value: day.memo, maxLength: 200, disabled: !editable,
-          placeholder: editable ? '오늘의 다짐이나 메모를 적어요' : '',
-          onChange: (e) => actions.saveDaily({ memo: e.target.value }) }));
-
-      return h('section', { class: `card sheet${editable ? '' : ' past'}` },
-        h('div', { class: 'sheet-top' }, dateBox, ddayBox, totalBox),
-        memo,
-        h('div', { class: 'sheet-body' }, contents(data, subjectOf, actions), timetable(data, { save: actions.saveTimetable })));
+      return h('section', { class: 'card sheet' },
+        h('div', { class: 'sheet-top' }, dateBox, timeBox),
+        h('div', { class: 'sheet-body' }, todo(data, subjectOf, actions), timetable(data, { save: actions.saveTimetable })));
     }
 
-    /** CONTENTS: 그날 할 일을 과목별로 묶고 형광펜처럼 칠한다. 완료는 O */
-    function contents(data, subjectOf, actions) {
+    /** TODO: 그날 할 일을 과목별로 묶는다. 완료하면 체크 표시와 취소선 */
+    function todo(data, subjectOf, actions) {
       const tasks = data.day.taskIds.map((id) => data.tasks.find((t) => t.id === id)).filter(Boolean);
       const groups = new Map();
       for (const t of tasks) groups.set(t.subjectId, [...(groups.get(t.subjectId) ?? []), t]);
       return h('div', { class: 'contents' },
-        h('div', { class: 'sheet-label' }, 'CONTENTS'),
+        h('div', { class: 'sheet-label' }, 'TODO'),
         groups.size === 0 && h('p', { class: 'empty' },
           data.editable ? '오른쪽 과목 목록에서 ＋오늘을 눌러 담아요' : '이 날은 담아 둔 할 일이 없어요'),
         [...groups].map(([subjectId, list]) => {
@@ -1343,9 +1276,9 @@ data:
           return h('div', { class: 'contents-group', style: `--c:${subject?.color}` },
             h('span', { class: 'hand subject-name' }, subject?.name),
             h('ul', {}, list.map((t) => h('li', { class: t.done ? 'done' : '' },
-              h('span', { class: 'hand highlight' }, t.title),
-              h('button', { class: 'mark', disabled: !data.editable, title: t.done ? '완료 취소' : '완료',
-                onClick: () => actions.toggleDone(t) }, t.done ? 'O' : '')))));
+              h('span', { class: 'todo-title' }, t.title),
+              h('button', { class: 'mark', disabled: !data.editable, 'aria-pressed': String(t.done),
+                title: t.done ? '완료 취소' : '완료', onClick: () => actions.toggleDone(t) }, t.done ? '✓' : '')))));
         }));
     }
   planner-view.js: |
@@ -1388,11 +1321,9 @@ data:
       const setToday = (ids) => act(put('/daily', { taskIds: ids }));
       const toggleDone = (t) => act(patch(`/tasks/${t.id}`, { done: !t.done }));
       const sheetActions = {
-        load,
         toggleDone,
         saveDaily: (changes) => act(put('/daily', changes)),
         saveTimetable: (cells) => act(put('/timetable', { timetable: cells })),
-        saveDday: (title, date) => act(put('/dday', { title, date })),
       };
 
       // ---------- 오늘의 플래너 (공부방 compact) ----------
@@ -1539,74 +1470,39 @@ data:
       };
     }
   planner.css: |
-    /* 플래너 페이지: 최근 7일 · 종이 플래너 시트(TODAY'S · D-DAY · TOTAL TIME · 한마디 · CONTENTS · TIMETABLE) */
-
-    /* ---------- 최근 7일 ---------- */
-    .week { display: flex; align-items: center; gap: 16px; padding: 12px 18px; }
-    .week-bars { flex: 1; display: grid; grid-template-columns: repeat(7, 1fr); gap: 8px; }
-    .week-day {
-      display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 6px 2px;
-      border: 2px solid transparent; border-radius: 12px; background: none; cursor: pointer; font: inherit;
-    }
-    .week-day:hover { background: #f8f0e2; }
-    .week-day.on { border-color: var(--leaf); background: #eef7e8; }
-    .week-day strong { font-size: 0.8rem; }
-    .week-bar { width: 22px; height: 46px; border-radius: 6px; background: #f1e6d2; display: flex; align-items: flex-end; overflow: hidden; }
-    .week-bar i { width: 100%; background: linear-gradient(180deg, #a7d38e, var(--leaf)); border-radius: 6px; min-height: 2px; }
+    /* 플래너 페이지: 플래너 시트(오늘 날짜 · 목표/공부한 시간 · TODO · TIMETABLE) */
 
     /* ---------- 시트 ---------- */
-    .sheet {
-      --grid: rgba(120, 100, 70, 0.08);
-      display: flex; flex-direction: column; gap: 14px;
-      background-color: #fffefa;
-      background-image: linear-gradient(var(--grid) 1px, transparent 1px), linear-gradient(90deg, var(--grid) 1px, transparent 1px);
-      background-size: 18px 18px;
-    }
-    .sheet.past { --grid: rgba(120, 100, 70, 0.05); background-color: #faf7f1; }
+    .sheet { display: flex; flex-direction: column; gap: 14px; background-color: #fffefa; }
     .sheet-label { font: 0.72rem var(--font-title); letter-spacing: 2px; color: #8f87b8; }
     .hand { font-family: var(--font-hand); }
     .hand.big { font-size: 1.9rem; line-height: 1.1; color: #5b5aa6; }
 
-    .sheet-top { display: grid; grid-template-columns: 1.6fr 1fr 1fr; gap: 10px; }
+    .sheet-top { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
     .sheet-box {
       display: flex; flex-direction: column; gap: 4px; padding: 10px 12px;
       border: 2px solid var(--line); border-radius: 14px; background: rgba(255, 255, 255, 0.85);
     }
-    .sheet-date .date-nav { display: flex; align-items: center; gap: 6px; }
-    .sheet-date .chip-btn { align-self: flex-start; }
-    .sheet-dday summary { list-style: none; cursor: pointer; display: flex; flex-direction: column; gap: 4px; }
-    .sheet-dday summary::-webkit-details-marker { display: none; }
-    .sheet-dday[open] form { margin-top: 8px; }
-    .sheet-total .goal input { width: 64px; }
-
-    .sheet-memo {
-      display: flex; align-items: center; gap: 10px; padding: 8px 12px;
-      border: 2px dashed var(--line); border-radius: 14px; background: rgba(255, 255, 255, 0.8);
-    }
-    .sheet-memo .sheet-label { white-space: nowrap; }
-    .sheet-memo input { border: 0; background: transparent; font-size: 1.25rem; padding: 2px 4px; }
-    .sheet-memo input:focus { background: #fff; }
+    .sheet-total .time-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .sheet-total .time-pair > div { display: flex; flex-direction: column; gap: 4px; }
+    .sheet-total .goal input { width: 72px; }
 
     .sheet-body { display: grid; grid-template-columns: minmax(0, 1fr) 236px; gap: 16px; align-items: start; }
 
-    /* ---------- CONTENTS ---------- */
+    /* ---------- TODO ---------- */
     .contents { display: flex; flex-direction: column; gap: 10px; }
     .contents-group { display: grid; grid-template-columns: 70px 1fr; gap: 8px; align-items: start; }
     .contents-group .subject-name { font-size: 1.15rem; color: var(--c); filter: brightness(0.75); padding-top: 4px; overflow-wrap: anywhere; }
     .contents-group ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
     .contents-group li { display: flex; align-items: center; gap: 8px; border-bottom: 1px solid #eee5d6; padding-bottom: 4px; }
-    .highlight {
-      flex: 1; font-size: 1.15rem; padding: 0 4px; overflow-wrap: anywhere;
-      /* 형광펜: 글자 아래쪽 60%만 과목 색으로 칠한다 */
-      background: linear-gradient(transparent 40%, color-mix(in srgb, var(--c) 45%, transparent) 40%);
-    }
-    .contents-group li.done .highlight { color: var(--muted); }
+    .todo-title { flex: 1; font-size: 1.15rem; padding: 0 4px; overflow-wrap: anywhere; }
+    .contents-group li.done .todo-title { color: var(--muted); text-decoration: line-through; }
     .mark {
       width: 28px; height: 28px; flex: none; border: 2px solid #c9bfd9; border-radius: 6px; background: #fff;
-      font: 700 1.2rem var(--font-hand); color: #5b5aa6; cursor: pointer;
+      display: grid; place-items: center; font: 700 1rem var(--font-body); color: #fff; cursor: pointer;
     }
     .mark:disabled { cursor: default; }
-    .contents-group li.done .mark { border-color: #5b5aa6; }
+    .contents-group li.done .mark { border-color: #5b5aa6; background: #5b5aa6; }
 
     /* ---------- TIMETABLE ---------- */
     .timetable { display: flex; flex-direction: column; gap: 6px; }
@@ -1625,18 +1521,13 @@ data:
     .tt-cell { position: relative; border-left: 1px dotted #e6e0f0; }
     .tt-cell.planned { background: color-mix(in srgb, var(--c) 55%, white); }
     .tt-cell.now { outline: 2px solid #e76f51; outline-offset: -2px; z-index: 1; }
-    .tt-actual, .tt-legend .tt-actual { display: block; position: absolute; left: 1px; right: 1px; bottom: 2px; height: 5px; border-radius: 3px; background: #5b5aa6; }
-    .tt-legend { display: flex; align-items: center; gap: 6px; }
-    .tt-legend .tt-actual { position: static; width: 18px; }
+    .tt-actual { display: block; position: absolute; left: 1px; right: 1px; bottom: 2px; height: 5px; border-radius: 3px; background: #5b5aa6; }
 
     @media (max-width: 960px) {
       .sheet-body { grid-template-columns: 1fr; }
     }
     @media (max-width: 640px) {
-      .sheet-top { grid-template-columns: 1fr 1fr; }
-      .sheet-date { grid-column: 1 / -1; }
-      .week { flex-direction: column; align-items: stretch; }
-      .week-bar { width: 16px; }
+      .sheet-top { grid-template-columns: 1fr; }
     }
   room-hud.js: |
     // 공부방 화면의 HUD(상단 바·참가자·하단 도크). 상태는 room-view.js가 갖고, 여기서는 그리기만 한다.
@@ -2788,12 +2679,9 @@ data:
 
       return h('div', { class: 'timetable' },
         h('div', { class: 'sheet-label' }, 'TIMETABLE'),
-        data.editable && (data.subjects.length
-          ? h('small', {}, '과목을 고르고 칸을 칠해 시간대별 계획을 세워요')
-          : h('small', {}, '과목을 만들면 시간표를 칠할 수 있어요')),
+        data.editable && !data.subjects.length && h('small', {}, '과목을 만들면 시간표를 칠할 수 있어요'),
         palette,
-        grid,
-        h('small', { class: 'tt-legend' }, h('i', { class: 'tt-actual' }), ' 실제로 공부한 10분'));
+        grid);
     }
   ui.js: |
     // DOM 생성·포맷 유틸과 화면 공용 상수
@@ -2853,7 +2741,6 @@ data:
 
     // 날짜는 서버와 같은 YYYYMMDD 문자열로 주고받는다
     const parseYmd = (s) => new Date(Number(s.slice(0, 4)), Number(s.slice(4, 6)) - 1, Number(s.slice(6, 8)));
-    const toYmd = (d) => `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`;
 
     /** "10.29 (목)" */
     export function fmtDate(ymd) {
@@ -2861,11 +2748,6 @@ data:
       return `${d.getMonth() + 1}.${d.getDate()} (${'일월화수목금토'[d.getDay()]})`;
     }
 
-    export function shiftDate(ymd, days) {
-      const d = parseYmd(ymd);
-      d.setDate(d.getDate() + days);
-      return toYmd(d);
-    }
 
     export function fmtShort(sec) {
       const hours = Math.floor(sec / 3600);
@@ -3240,42 +3122,29 @@ data:
     .page .room-dialog::backdrop { background: #202e2759; backdrop-filter: blur(3px); }
 
     /* 플래너: 종이의 격자와 과목 색은 유지하고, 상자 장식은 덜어낸다. */
-    .page-planner .week { padding: 18px 24px; gap: 32px; }
-    .page-planner .week-day { border-width: 1px; border-radius: 3px; padding: 10px 4px; gap: 5px; }
-    .page-planner .week-day:hover { background: #f0f1e9; }
-    .page-planner .week-day.on { background: #edf0e7; border-color: #b7c3ad; }
-    .page-planner .week-bar { width: 12px; background: #eef0e7; border-radius: 2px; }
-    .page-planner .week-bar i { background: #7d9177; border-radius: 1px; }
-    .page-planner .week-day strong { font-size: 11px; font-weight: 500; }
-    .page-planner .week-day small { font-size: 11px; }
     .page-planner .planner-grid { grid-template-columns: minmax(0, 1fr) 300px; gap: 24px; }
-    .page-planner .sheet { --grid: #68775c08; background-color: #fffefa; background-size: 20px 20px; padding: 24px; gap: 24px; }
-    .page-planner .sheet.past { background-color: #f3f3ec; }
+    .page-planner .sheet { padding: 24px; gap: 24px; }
     .page-planner .sheet-label { color: #78806f; font-size: 10px; font-weight: 600; letter-spacing: 1px; }
     .page-planner .hand { font-family: var(--font-body); }
     .page-planner .hand.big { color: var(--ink); font-size: 23px; font-weight: 500; letter-spacing: -0.04em; line-height: 1.4; }
-    .page-planner .sheet-top { grid-template-columns: 1.4fr 1fr 1.2fr; gap: 0; }
+    .page-planner .sheet-top { gap: 0; padding-bottom: 20px; border-bottom: 1px solid var(--line); }
     .page-planner .sheet-box { padding: 0 16px; border: 0; border-left: 1px solid var(--line); border-radius: 0; background: transparent; gap: 8px; min-width: 0; }
     .page-planner .sheet-box:first-child { padding-left: 0; border-left: 0; }
     .page-planner .sheet-box:last-child { padding-right: 0; }
-    .page-planner .sheet-date .date-nav { gap: 3px; flex-wrap: wrap; }
-    .page-planner .sheet-date .date-nav .icon { font-size: 9px; padding: 4px 2px; }
-    .page-planner .sheet-date .date-nav strong { font-family: Georgia, serif; }
-    .page-planner .sheet-total .goal { font-size: 11px; flex-wrap: wrap; }
-    .page-planner .sheet-total .goal input { width: 55px; min-height: 26px; padding: 2px 6px; }
+    .page-planner .sheet-date { justify-content: center; }
+    .page-planner .sheet-total .goal { font-size: 12px; }
+    .page-planner .sheet-total .goal input { width: 72px; min-height: 32px; padding: 2px 8px; font-size: 16px; color: var(--ink); }
     .page-planner .progress .bar { height: 4px; background: #e9ede3; }
     .page-planner .progress .bar span { background: #81956f; }
-    .page-planner .sheet-memo { padding: 14px 0; border: 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); border-radius: 0; background: transparent; }
-    .page-planner .sheet-memo input { min-height: 28px; font-size: 13px; padding: 2px 4px; background: transparent; }
     .page-planner .sheet-body { grid-template-columns: minmax(0, 1fr) 194px; gap: 24px; }
     .page-planner .contents { gap: 18px; }
     .page-planner .contents .empty { margin: 20px 0; font-size: 12px; line-height: 1.9; }
     .page-planner .contents-group { grid-template-columns: 62px 1fr; }
     .page-planner .contents-group .subject-name { font-size: 12px; }
-    .page-planner .highlight { font-size: 13px; line-height: 1.9; }
+    .page-planner .todo-title { font-size: 13px; line-height: 1.9; }
     .page-planner .contents-group li { border-color: var(--line); }
-    .page-planner .mark { width: 23px; height: 23px; border: 1px solid #c3cbb9; border-radius: 3px; color: var(--leaf); font: 12px var(--font-body); }
-    .page-planner .contents-group li.done .mark { border-color: var(--leaf); }
+    .page-planner .mark { width: 20px; height: 20px; border: 1px solid #c3cbb9; border-radius: 3px; background: #fffefa; color: #fffefa; font: 700 12px var(--font-body); }
+    .page-planner .contents-group li.done .mark { border-color: var(--leaf); background: var(--leaf); }
     .page-planner .tt-grid { border: 1px solid #b8c1ab; border-radius: 2px; }
     .page-planner .tt-row { border-color: #e2e6d9; }
     .page-planner .tt-cell { border-color: #e2e6d9; }
@@ -3292,7 +3161,15 @@ data:
     .page-planner .subject-toggle { font-size: 13px; }
     .page-planner .subject-toggle small { font-size: 10px; }
     .page-planner .task { padding: 7px 0; border-radius: 0; font-size: 12px; background: transparent; }
-    .page-planner .task input[type='checkbox'] { width: 15px; height: 15px; min-height: auto; }
+    .page-planner .task input[type='checkbox'] {
+      appearance: none; flex: none; width: 20px; height: 20px; min-height: auto; margin: 0; padding: 0;
+      border: 1px solid #c3cbb9; border-radius: 3px; background: #fffefa; cursor: pointer;
+    }
+    /* TODO의 완료 표시(.mark)와 같은 모양: 초록 칸 + 흰 체크 */
+    .page-planner .task input[type='checkbox']:checked {
+      border-color: var(--leaf);
+      background: var(--leaf) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M5 10.5l3.2 3.2L15 7' fill='none' stroke='%23fffefa' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center / 16px no-repeat;
+    }
     .page-planner .chip-btn { padding: 3px 7px; border-width: 1px; border-radius: 3px; font-size: 10px; }
     .page-planner .chip-btn.on { background: #edf0e7; }
     .page-planner .subject-body form input { min-width: 0; font-size: 12px; }
@@ -3356,20 +3233,11 @@ data:
       .code-join label { font-size: 11px; white-space: nowrap; }
       .page .room-grid { grid-template-columns: 1fr; gap: 14px; }
       .page .room-card { padding: 22px; }
-      .page-planner .week { padding: 16px 10px; gap: 14px; align-items: stretch; }
-      .page-planner .week > .sheet-label { padding-left: 6px; }
-      .page-planner .week-bars { gap: 2px; }
-      .page-planner .week-day { padding-inline: 0; }
-      .page-planner .week-day small { font-size: 9px; }
-      .page-planner .sheet { padding: 18px; gap: 20px; }
-      .page-planner .sheet-top { grid-template-columns: 1fr 1fr; row-gap: 20px; }
-      .page-planner .sheet-date { grid-column: 1 / -1; border-bottom: 1px solid var(--line); padding-bottom: 16px; }
-      .page-planner .sheet-dday { border-left: 0; padding-left: 0; }
-      .page-planner .sheet-total { padding-left: 18px; }
+        .page-planner .sheet { padding: 18px; gap: 20px; }
+      .page-planner .sheet-top { row-gap: 16px; }
+      .page-planner .sheet-total { padding-left: 0; border-left: 0; }
       .page-planner .sheet-body { grid-template-columns: 1fr; }
-      .page-planner .sheet-memo { flex-wrap: wrap; gap: 4px; }
-      .page-planner .sheet-memo input { width: 100%; }
-      .page-character .card { padding: 18px; }
+        .page-character .card { padding: 18px; }
     }
     @media (prefers-reduced-motion: reduce) {
       :is(.auth-page, .app-header, .page) * { transition: none !important; }

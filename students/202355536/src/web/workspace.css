@@ -141,42 +141,29 @@ body:has(.auth-page) { background: #12131c; }
 .page .room-dialog::backdrop { background: #202e2759; backdrop-filter: blur(3px); }
 
 /* 플래너: 종이의 격자와 과목 색은 유지하고, 상자 장식은 덜어낸다. */
-.page-planner .week { padding: 18px 24px; gap: 32px; }
-.page-planner .week-day { border-width: 1px; border-radius: 3px; padding: 10px 4px; gap: 5px; }
-.page-planner .week-day:hover { background: #f0f1e9; }
-.page-planner .week-day.on { background: #edf0e7; border-color: #b7c3ad; }
-.page-planner .week-bar { width: 12px; background: #eef0e7; border-radius: 2px; }
-.page-planner .week-bar i { background: #7d9177; border-radius: 1px; }
-.page-planner .week-day strong { font-size: 11px; font-weight: 500; }
-.page-planner .week-day small { font-size: 11px; }
 .page-planner .planner-grid { grid-template-columns: minmax(0, 1fr) 300px; gap: 24px; }
-.page-planner .sheet { --grid: #68775c08; background-color: #fffefa; background-size: 20px 20px; padding: 24px; gap: 24px; }
-.page-planner .sheet.past { background-color: #f3f3ec; }
+.page-planner .sheet { padding: 24px; gap: 24px; }
 .page-planner .sheet-label { color: #78806f; font-size: 10px; font-weight: 600; letter-spacing: 1px; }
 .page-planner .hand { font-family: var(--font-body); }
 .page-planner .hand.big { color: var(--ink); font-size: 23px; font-weight: 500; letter-spacing: -0.04em; line-height: 1.4; }
-.page-planner .sheet-top { grid-template-columns: 1.4fr 1fr 1.2fr; gap: 0; }
+.page-planner .sheet-top { gap: 0; padding-bottom: 20px; border-bottom: 1px solid var(--line); }
 .page-planner .sheet-box { padding: 0 16px; border: 0; border-left: 1px solid var(--line); border-radius: 0; background: transparent; gap: 8px; min-width: 0; }
 .page-planner .sheet-box:first-child { padding-left: 0; border-left: 0; }
 .page-planner .sheet-box:last-child { padding-right: 0; }
-.page-planner .sheet-date .date-nav { gap: 3px; flex-wrap: wrap; }
-.page-planner .sheet-date .date-nav .icon { font-size: 9px; padding: 4px 2px; }
-.page-planner .sheet-date .date-nav strong { font-family: Georgia, serif; }
-.page-planner .sheet-total .goal { font-size: 11px; flex-wrap: wrap; }
-.page-planner .sheet-total .goal input { width: 55px; min-height: 26px; padding: 2px 6px; }
+.page-planner .sheet-date { justify-content: center; }
+.page-planner .sheet-total .goal { font-size: 12px; }
+.page-planner .sheet-total .goal input { width: 72px; min-height: 32px; padding: 2px 8px; font-size: 16px; color: var(--ink); }
 .page-planner .progress .bar { height: 4px; background: #e9ede3; }
 .page-planner .progress .bar span { background: #81956f; }
-.page-planner .sheet-memo { padding: 14px 0; border: 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); border-radius: 0; background: transparent; }
-.page-planner .sheet-memo input { min-height: 28px; font-size: 13px; padding: 2px 4px; background: transparent; }
 .page-planner .sheet-body { grid-template-columns: minmax(0, 1fr) 194px; gap: 24px; }
 .page-planner .contents { gap: 18px; }
 .page-planner .contents .empty { margin: 20px 0; font-size: 12px; line-height: 1.9; }
 .page-planner .contents-group { grid-template-columns: 62px 1fr; }
 .page-planner .contents-group .subject-name { font-size: 12px; }
-.page-planner .highlight { font-size: 13px; line-height: 1.9; }
+.page-planner .todo-title { font-size: 13px; line-height: 1.9; }
 .page-planner .contents-group li { border-color: var(--line); }
-.page-planner .mark { width: 23px; height: 23px; border: 1px solid #c3cbb9; border-radius: 3px; color: var(--leaf); font: 12px var(--font-body); }
-.page-planner .contents-group li.done .mark { border-color: var(--leaf); }
+.page-planner .mark { width: 20px; height: 20px; border: 1px solid #c3cbb9; border-radius: 3px; background: #fffefa; color: #fffefa; font: 700 12px var(--font-body); }
+.page-planner .contents-group li.done .mark { border-color: var(--leaf); background: var(--leaf); }
 .page-planner .tt-grid { border: 1px solid #b8c1ab; border-radius: 2px; }
 .page-planner .tt-row { border-color: #e2e6d9; }
 .page-planner .tt-cell { border-color: #e2e6d9; }
@@ -193,7 +180,15 @@ body:has(.auth-page) { background: #12131c; }
 .page-planner .subject-toggle { font-size: 13px; }
 .page-planner .subject-toggle small { font-size: 10px; }
 .page-planner .task { padding: 7px 0; border-radius: 0; font-size: 12px; background: transparent; }
-.page-planner .task input[type='checkbox'] { width: 15px; height: 15px; min-height: auto; }
+.page-planner .task input[type='checkbox'] {
+  appearance: none; flex: none; width: 20px; height: 20px; min-height: auto; margin: 0; padding: 0;
+  border: 1px solid #c3cbb9; border-radius: 3px; background: #fffefa; cursor: pointer;
+}
+/* TODO의 완료 표시(.mark)와 같은 모양: 초록 칸 + 흰 체크 */
+.page-planner .task input[type='checkbox']:checked {
+  border-color: var(--leaf);
+  background: var(--leaf) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M5 10.5l3.2 3.2L15 7' fill='none' stroke='%23fffefa' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center / 16px no-repeat;
+}
 .page-planner .chip-btn { padding: 3px 7px; border-width: 1px; border-radius: 3px; font-size: 10px; }
 .page-planner .chip-btn.on { background: #edf0e7; }
 .page-planner .subject-body form input { min-width: 0; font-size: 12px; }
@@ -257,20 +252,11 @@ body:has(.auth-page) { background: #12131c; }
   .code-join label { font-size: 11px; white-space: nowrap; }
   .page .room-grid { grid-template-columns: 1fr; gap: 14px; }
   .page .room-card { padding: 22px; }
-  .page-planner .week { padding: 16px 10px; gap: 14px; align-items: stretch; }
-  .page-planner .week > .sheet-label { padding-left: 6px; }
-  .page-planner .week-bars { gap: 2px; }
-  .page-planner .week-day { padding-inline: 0; }
-  .page-planner .week-day small { font-size: 9px; }
-  .page-planner .sheet { padding: 18px; gap: 20px; }
-  .page-planner .sheet-top { grid-template-columns: 1fr 1fr; row-gap: 20px; }
-  .page-planner .sheet-date { grid-column: 1 / -1; border-bottom: 1px solid var(--line); padding-bottom: 16px; }
-  .page-planner .sheet-dday { border-left: 0; padding-left: 0; }
-  .page-planner .sheet-total { padding-left: 18px; }
+    .page-planner .sheet { padding: 18px; gap: 20px; }
+  .page-planner .sheet-top { row-gap: 16px; }
+  .page-planner .sheet-total { padding-left: 0; border-left: 0; }
   .page-planner .sheet-body { grid-template-columns: 1fr; }
-  .page-planner .sheet-memo { flex-wrap: wrap; gap: 4px; }
-  .page-planner .sheet-memo input { width: 100%; }
-  .page-character .card { padding: 18px; }
+    .page-character .card { padding: 18px; }
 }
 @media (prefers-reduced-motion: reduce) {
   :is(.auth-page, .app-header, .page) * { transition: none !important; }

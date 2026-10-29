@@ -55,7 +55,6 @@ export const fmtClock = (sec) =>
 
 // 날짜는 서버와 같은 YYYYMMDD 문자열로 주고받는다
 const parseYmd = (s) => new Date(Number(s.slice(0, 4)), Number(s.slice(4, 6)) - 1, Number(s.slice(6, 8)));
-const toYmd = (d) => `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`;
 
 /** "10.29 (목)" */
 export function fmtDate(ymd) {
@@ -63,11 +62,6 @@ export function fmtDate(ymd) {
   return `${d.getMonth() + 1}.${d.getDate()} (${'일월화수목금토'[d.getDay()]})`;
 }
 
-export function shiftDate(ymd, days) {
-  const d = parseYmd(ymd);
-  d.setDate(d.getDate() + days);
-  return toYmd(d);
-}
 
 export function fmtShort(sec) {
   const hours = Math.floor(sec / 3600);

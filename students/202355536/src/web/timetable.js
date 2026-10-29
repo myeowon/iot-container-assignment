@@ -76,10 +76,7 @@ export function timetable(data, { save }) {
 
   return h('div', { class: 'timetable' },
     h('div', { class: 'sheet-label' }, 'TIMETABLE'),
-    data.editable && (data.subjects.length
-      ? h('small', {}, '과목을 고르고 칸을 칠해 시간대별 계획을 세워요')
-      : h('small', {}, '과목을 만들면 시간표를 칠할 수 있어요')),
+    data.editable && !data.subjects.length && h('small', {}, '과목을 만들면 시간표를 칠할 수 있어요'),
     palette,
-    grid,
-    h('small', { class: 'tt-legend' }, h('i', { class: 'tt-actual' }), ' 실제로 공부한 10분'));
+    grid);
 }

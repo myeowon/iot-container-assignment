@@ -37,11 +37,9 @@ export function createPlanner(container, { compact = false, onChange } = {}) {
   const setToday = (ids) => act(put('/daily', { taskIds: ids }));
   const toggleDone = (t) => act(patch(`/tasks/${t.id}`, { done: !t.done }));
   const sheetActions = {
-    load,
     toggleDone,
     saveDaily: (changes) => act(put('/daily', changes)),
     saveTimetable: (cells) => act(put('/timetable', { timetable: cells })),
-    saveDday: (title, date) => act(put('/dday', { title, date })),
   };
 
   // ---------- 오늘의 플래너 (공부방 compact) ----------
