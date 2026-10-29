@@ -15,7 +15,7 @@ const HEARTBEAT_MS = 3000;
 const KICK_OUT = [401, 403, 404, 409];
 
 export function mountRoom(root, ctx, roomId) {
-  const state = { seat: null, running: false, onBreak: false, mode: 'manual', present: true, subjectId: null };
+  const state = { seat: null, running: false, onBreak: false, mode: 'manual', present: true };
   let me = { totalSec: 0 };
   let syncedAt = 0;
   let scene = null;
@@ -37,7 +37,6 @@ export function mountRoom(root, ctx, roomId) {
     start: () => change({ running: true, onBreak: false }),
     stop: () => change({ running: false, onBreak: false }),
     toggleBreak: () => change({ onBreak: !state.onBreak }),
-    subject: (id) => change({ subjectId: id }),
     mode: setMode,
     music: async () => {
       lofi.playing ? lofi.pause() : await lofi.play();
@@ -50,11 +49,7 @@ export function mountRoom(root, ctx, roomId) {
 
   const planner = createPlanner(hud.plannerBox, {
     compact: true,
-    onChange: (d) => {
-      if (!d.subjects.some((s) => s.id === state.subjectId)) state.subjectId = null;
-      hud.setSubjects(d.subjects, state.subjectId);
-      beat();   // 책상 위 책 더미(남은 할 일) 갱신
-    },
+    onChange: () => beat(),   // 책상 위 책 더미(남은 할 일) 갱신
   });
   planner.load();
 
@@ -99,9 +94,8 @@ export function mountRoom(root, ctx, roomId) {
     }
     inflight = true;
     try {
-      const subject = planner.data?.subjects.find((s) => s.id === state.subjectId);
       const res = await post(`/rooms/${roomId}/heartbeat`, {
-        seat: state.seat, status: status(), subjectId: state.subjectId, subjectColor: subject?.color,
+        seat: state.seat, status: status(),
       });
       if (closed) return;
       if (res.seatTaken) {
@@ -113,7 +107,6 @@ export function mountRoom(root, ctx, roomId) {
       scene ??= createScene(hud.stage, {
         seatCount: res.room.max,
         onSeatClick: (seat) => change({ seat }),
-        onDaylight: (d) => hud.setDaylight(d),
       });
       scene.update(res.members, ctx.user.id, true);
       hud.setRoom(res.room);
@@ -142,6 +135,7 @@ export function mountRoom(root, ctx, roomId) {
   const leaveBeacon = () => navigator.sendBeacon(`/api/rooms/${roomId}/leave`);
   addEventListener('pagehide', leaveBeacon);
   hud.renderControls(state, status());
+  renderTimer();
   beat();
   const timers = [setInterval(beat, HEARTBEAT_MS), setInterval(renderTimer, 1000)];
 

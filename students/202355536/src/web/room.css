@@ -23,6 +23,12 @@
 .room-screen .seg.on { background: var(--amber); border-color: var(--amber); color: #2a1a0e; }
 .room-screen input, .room-screen select { background: rgba(255, 240, 220, 0.08); border: 1px solid var(--glass-line); color: var(--cream); }
 .room-screen option, .room-screen optgroup { color: #2a1a0e; }
+/* 기본 화살표는 브라우저마다 칸 밖으로 밀려나므로 직접 그려 안쪽에 고정한다 */
+.room-screen select {
+  appearance: none; padding-right: 34px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8'%3E%3Cpath d='M1 1.5l5 5 5-5' fill='none' stroke='%23f6e7cf' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat; background-position: right 12px center; background-size: 12px 8px;
+}
 .room-screen .badge, .room-screen .chip { background: rgba(255, 230, 190, 0.14); color: var(--cream); }
 .room-screen .badge.private { background: rgba(240, 166, 74, 0.25); }
 
@@ -46,14 +52,19 @@
 .name-tag.AWAY { color: #ffb4a0; }
 
 .room-top {
-  position: absolute; top: 12px; left: 16px; right: 16px;
+  position: absolute; top: 14px; left: 16px; right: 16px;
   display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap;
   pointer-events: none;
 }
 .room-top > * { pointer-events: auto; }
-.room-title { display: flex; align-items: center; gap: 10px; font-family: var(--font-title); font-size: 1.3rem; text-shadow: 0 2px 8px #000; }
+.room-title { display: flex; align-items: center; gap: 10px; font-family: var(--font-title); font-size: 1.2rem; text-shadow: 0 2px 8px #000; }
+.room-tools { gap: 6px; }
+.room-tools .btn { width: 96px; text-align: center; }
+/* 밝은 벽 위에서도 보이도록 상단 버튼에는 유리 배경을 깐다 */
+.room-top .btn.ghost { background: var(--glass); backdrop-filter: blur(6px); }
+.room-tools .btn[aria-pressed='true'] { background: rgba(240, 166, 74, 0.25); border-color: var(--amber); }
 
-.panel { position: absolute; top: 64px; width: 290px; max-height: calc(100% - 300px); overflow: auto; padding: 14px; }
+.panel { position: absolute; top: 64px; width: 290px; max-height: calc(100% - 200px); overflow: auto; padding: 14px; }
 .panel.left { left: 16px; }
 .panel.right { right: 16px; }
 .panel.hidden { display: none; }
@@ -73,23 +84,40 @@
 .dot-status.AWAY { background: #ff7b5c; }
 .dot-status.BREAK { background: #f0c75e; }
 
-/* 왼쪽 아래 큰 타이머 */
-.session { position: absolute; left: 28px; bottom: 22px; pointer-events: none; text-shadow: 0 2px 12px rgba(0, 0, 0, 0.7); }
-.session-label { display: flex; align-items: center; gap: 8px; font-size: 1.05rem; letter-spacing: 2px; opacity: 0.9; }
-.timer { font-family: var(--font-title); font-size: 4.2rem; line-height: 1; letter-spacing: 2px; font-variant-numeric: tabular-nums; color: #fff8ec; }
+/* 자리에 앉기 전 안내: 화면 정중앙 (클릭은 뒤의 3D 장면으로 통과) */
+.seat-hint {
+  position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); pointer-events: none;
+  padding: 10px 22px; border-radius: 999px; background: var(--glass); border: 1px solid var(--glass-line);
+  font: 1.15rem var(--font-title); color: var(--cream); white-space: nowrap; backdrop-filter: blur(6px);
+}
+.seat-hint[hidden] { display: none; }
+
+/* 왼쪽 아래: 지금 시간 · 오늘의 공부를 같은 크기로 위아래 */
+.session {
+  position: absolute; left: 28px; bottom: 22px; display: flex; flex-direction: column; gap: 14px;
+  pointer-events: none; text-shadow: 0 2px 12px rgba(0, 0, 0, 0.7);
+}
+.session-label { display: flex; align-items: center; gap: 8px; min-height: 24px; margin-bottom: 4px; font-size: 1.05rem; letter-spacing: 2px; opacity: 0.9; }
+.timer { font-family: var(--font-title); font-size: 3.2rem; line-height: 1; letter-spacing: 2px; font-variant-numeric: tabular-nums; color: #fff8ec; }
+
+/* 하단 가운데 도크: 과목 · 시작/휴식 · 감지 모드 · 카메라 */
 .status-pill { font-family: var(--font-title); font-size: 0.8rem; letter-spacing: 0; padding: 2px 10px; border-radius: 999px; background: rgba(255, 240, 220, 0.14); }
 .status-pill.STUDYING { background: rgba(143, 209, 106, 0.25); color: #c9f0ad; }
 .status-pill.AWAY { background: rgba(255, 123, 92, 0.25); color: #ffc2b0; }
 .status-pill.BREAK { background: rgba(240, 199, 94, 0.25); color: #ffe39a; }
 
 .dock {
-  position: absolute; right: 16px; bottom: 16px;
-  display: flex; align-items: center; gap: 16px; padding: 12px 16px; max-width: calc(100% - 380px);
-  flex-wrap: wrap; justify-content: flex-end;
+  position: absolute; left: 50%; bottom: 16px; transform: translateX(-50%);
+  display: flex; align-items: center; gap: 20px; padding: 12px 18px; max-width: calc(100% - 32px);
+  flex-wrap: wrap; justify-content: center;
 }
-.dock-subject { display: flex; flex-direction: column; gap: 2px; min-width: 150px; }
-.controls { display: flex; flex-direction: column; gap: 6px; align-items: center; }
-.controls .mode .seg { padding: 3px 10px; font-size: 0.85rem; }
+.controls { display: flex; flex-direction: column; gap: 8px; width: 220px; }
+.controls .mode { display: grid; grid-template-columns: 1fr 1fr; }
+.controls .mode .seg { padding: 6px 0; font-size: 0.85rem; border-radius: 0; }
+.controls .mode .seg:first-child { border-radius: 999px 0 0 999px; }
+.controls .mode .seg:last-child { border-radius: 0 999px 999px 0; border-left: 0; }
+.controls .actions { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.controls .btn { width: 100%; }
 .camera { position: relative; display: flex; align-items: center; }
 .camera video { width: 112px; height: 84px; object-fit: cover; border-radius: 12px; transform: scaleX(-1); border: 2px solid var(--glass-line); }
 .camera .led { position: absolute; top: 6px; right: 6px; width: 12px; height: 12px; border-radius: 50%; background: #6d6157; border: 2px solid #fff; }
@@ -99,14 +127,20 @@
 .camera.detected .camera-note { color: #c9f0ad; }
 .camera.detected video { border-color: #8fd16a; }
 
+/* 타이머와 겹치지 않게, 화면이 좁으면 도크를 오른쪽으로 비킨다 */
+@media (max-width: 1180px) {
+  .dock { left: auto; right: 16px; transform: none; }
+}
 @media (max-width: 860px) {
   .room-screen { overflow: auto; display: flex; flex-direction: column; }
   .room-screen > * { flex: none; }
   .room-top { order: -1; position: static; padding: 12px 16px 0; }
+  .seat-hint { top: calc(46vh / 2 + 56px); font-size: 0.95rem; }
   .stage { position: relative; height: 46vh; }
-  .session { position: absolute; top: calc(46vh + 20px); left: 24px; bottom: auto; }
-  .timer { font-size: 2.6rem; }
   .name-tag { font-size: 10px; padding: 1px 7px; }
   .panel { position: static; width: auto; max-height: none; margin: 8px 16px; }
-  .dock { position: static; margin: 8px 16px 16px; max-width: none; justify-content: center; }
+  .session { position: absolute; top: calc(46vh + 20px); left: 24px; bottom: auto; }
+  .session { gap: 10px; }
+  .timer { font-size: 2.2rem; }
+  .dock { position: static; transform: none; margin: 8px 16px 16px; max-width: none; }
 }

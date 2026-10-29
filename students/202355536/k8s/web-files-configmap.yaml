@@ -1531,39 +1531,51 @@ data:
       .sheet-top { grid-template-columns: 1fr; }
     }
   room-hud.js: |
-    // 공부방 화면의 HUD(상단 바·참가자·하단 도크). 상태는 room-view.js가 갖고, 여기서는 그리기만 한다.
+    // 공부방 화면의 HUD(상단 바·접는 패널·하단 도크). 상태는 room-view.js가 갖고, 여기서는 그리기만 한다.
+    // 3D 장면이 잘 보이도록 플래너·참가자 패널은 닫아 두고 상단 버튼으로 연다.
     import { STATUS, characterOf, fmtClock, fmtShort, h } from './ui.js';
 
     export function createHud(on) {
       const roomName = h('strong', {});
       const codeBox = h('span', {});
-      const daylightChip = h('span', { class: 'badge daylight' });
       const members = h('ul', { class: 'members' });
+      const memberCount = h('span', {}, '0');
       const timer = h('div', { class: 'timer' }, '00:00:00');
+      const clock = h('div', { class: 'timer' }, '00:00');
       const statusPill = h('span', { class: 'status-pill' });
-      const subjectSelect = h('select', { 'aria-label': '지금 공부하는 과목', onChange: (e) => on.subject(e.target.value || null) });
+      const seatHint = h('div', { class: 'seat-hint' }, '빈 자리를 클릭해 앉으세요');
       const controls = h('div', { class: 'controls' });
       const cameraBox = h('div', { class: 'camera' });
       const cameraNote = h('small', { class: 'camera-note' });
-      const musicBtn = h('button', { class: 'btn ghost small', onClick: on.music }, '🎵 lo-fi 켜기');
+      const musicBtn = h('button', { class: 'btn ghost small', onClick: on.music }, '🎵 lo-fi');
+      const volume = h('input', { type: 'range', min: 0, max: 1, step: 0.05, value: 0.6, 'aria-label': '음량', hidden: true,
+        onInput: (e) => on.volume(Number(e.target.value)) });
       const plannerBox = h('div', { class: 'planner compact' });
-      const plannerPanel = h('aside', { class: 'panel left card' }, plannerBox);
+      const plannerPanel = h('aside', { class: 'panel left card hidden' }, plannerBox);
+      const membersPanel = h('aside', { class: 'panel right card hidden' }, h('h3', {}, '함께 공부 중'), members);
+
+      const panelToggle = (panel, ...label) => h('button', { class: 'btn ghost small', 'aria-pressed': 'false', onClick: (e) => {
+        const open = panel.classList.toggle('hidden') === false;
+        e.currentTarget.setAttribute('aria-pressed', String(open));
+      } }, ...label);
 
       const el = h('div', { class: 'room-screen' },
         h('div', { class: 'stage' }),
         h('header', { class: 'room-top' },
-          h('button', { class: 'btn ghost small', onClick: on.leave }, '← 공부방 목록'),
-          h('div', { class: 'room-title' }, roomName, codeBox, daylightChip),
-          h('div', { class: 'row' },
-            h('button', { class: 'btn ghost small', onClick: () => plannerPanel.classList.toggle('hidden') }, '📒 플래너'),
-            musicBtn,
-            h('input', { type: 'range', min: 0, max: 1, step: 0.05, value: 0.6, 'aria-label': '음량',
-              onInput: (e) => on.volume(Number(e.target.value)) }))),
+          h('div', { class: 'room-title' },
+            h('button', { class: 'btn ghost small', title: '공부방 목록', 'aria-label': '공부방 목록', onClick: on.leave }, '←'),
+            roomName, codeBox),
+          h('div', { class: 'row room-tools' },
+            panelToggle(plannerPanel, '📒 플래너'),
+            panelToggle(membersPanel, '👥 ', memberCount),
+            musicBtn, volume)),
+        seatHint,
         plannerPanel,
-        h('aside', { class: 'panel right card' }, h('h3', {}, '함께 공부 중'), members),
-        h('div', { class: 'session' }, h('div', { class: 'session-label' }, '오늘의 공부 ', statusPill), timer),
+        membersPanel,
+        h('div', { class: 'session' },
+          h('div', {}, h('div', { class: 'session-label' }, '지금 시간'), clock),
+          h('div', {}, h('div', { class: 'session-label' }, '오늘의 공부', statusPill), timer)),
         h('footer', { class: 'dock card' },
-          h('label', { class: 'dock-subject' }, h('small', {}, '지금 공부하는 과목'), subjectSelect),
           controls,
           cameraBox));
 
@@ -1581,6 +1593,7 @@ data:
 
         renderMembers(list, myId) {
           const sorted = [...list].sort((a, b) => (a.seat ?? 99) - (b.seat ?? 99));
+          memberCount.textContent = String(list.length);
           members.replaceChildren(...sorted.map((m) => h('li', { class: m.id === myId ? 'me' : '' },
             h('span', { class: 'avatar', style: `--c:${characterOf(m.character).color}` }, characterOf(m.character).emoji),
             h('div', {}, h('strong', {}, m.name, m.id === myId && ' (나)'),
@@ -1589,33 +1602,26 @@ data:
         },
 
         renderControls(state, status) {
+          seatHint.hidden = state.seat != null;
+          statusPill.hidden = state.seat == null;
           statusPill.className = `status-pill ${status}`;
-          statusPill.textContent = state.seat == null ? '빈 자리를 클릭해 앉으세요' : `${STATUS[status].emoji} ${STATUS[status].label}`;
+          statusPill.textContent = `${STATUS[status].emoji} ${STATUS[status].label}`;
           const btn = (label, onClick, cls = '') => h('button', { class: `btn ${cls}`, onClick, disabled: state.seat == null }, label);
           const seg = (mode, label) => h('button', { class: `seg${state.mode === mode ? ' on' : ''}`, onClick: () => on.mode(mode) }, label);
+          // 위: 수동 | 자리 감지 (반반), 아래: 같은 너비의 시작(또는 휴식·그만하기) 버튼
           controls.replaceChildren(
+            h('div', { class: 'mode' }, seg('manual', '✋ 수동'), seg('camera', '📷 자리 감지')),
             state.running
-              ? h('div', { class: 'row' },
+              ? h('div', { class: 'actions' },
                 btn(state.onBreak ? '▶ 다시 공부' : '☕ 휴식', on.toggleBreak),
                 btn('■ 그만하기', on.stop, 'ghost'))
-              : btn('▶ 공부 시작', on.start, 'primary'),
-            h('div', { class: 'row mode' }, seg('manual', '✋ 수동'), seg('camera', '📷 자리 감지')));
-        },
-
-        /** 창밖 시간대 표시: "🌇 노을 18:30" */
-        setDaylight(d) {
-          const hh = String(Math.floor(d.hours)).padStart(2, '0');
-          const mm = String(Math.floor((d.hours % 1) * 60)).padStart(2, '0');
-          daylightChip.textContent = `${d.name} ${hh}:${mm}`;
+              : btn('▶ 공부 시작', on.start, 'primary'));
         },
 
         renderTimer(sec) {
           timer.textContent = fmtClock(Math.floor(sec));
-        },
-
-        setSubjects(subjects, selected) {
-          subjectSelect.replaceChildren(h('option', { value: '' }, '시간표 계획대로'),
-            ...subjects.map((s) => h('option', { value: s.id, selected: s.id === selected }, s.name)));
+          const now = new Date();
+          clock.textContent = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
         },
 
         setCamera(video, message) {
@@ -1631,7 +1637,8 @@ data:
         },
 
         setMusic(playing) {
-          musicBtn.textContent = playing ? '🎵 lo-fi 끄기' : '🎵 lo-fi 켜기';
+          musicBtn.textContent = playing ? '🎵 끄기' : '🎵 lo-fi';
+          volume.hidden = !playing;
         },
       };
     }
@@ -1797,7 +1804,7 @@ data:
     const KICK_OUT = [401, 403, 404, 409];
 
     export function mountRoom(root, ctx, roomId) {
-      const state = { seat: null, running: false, onBreak: false, mode: 'manual', present: true, subjectId: null };
+      const state = { seat: null, running: false, onBreak: false, mode: 'manual', present: true };
       let me = { totalSec: 0 };
       let syncedAt = 0;
       let scene = null;
@@ -1819,7 +1826,6 @@ data:
         start: () => change({ running: true, onBreak: false }),
         stop: () => change({ running: false, onBreak: false }),
         toggleBreak: () => change({ onBreak: !state.onBreak }),
-        subject: (id) => change({ subjectId: id }),
         mode: setMode,
         music: async () => {
           lofi.playing ? lofi.pause() : await lofi.play();
@@ -1832,11 +1838,7 @@ data:
 
       const planner = createPlanner(hud.plannerBox, {
         compact: true,
-        onChange: (d) => {
-          if (!d.subjects.some((s) => s.id === state.subjectId)) state.subjectId = null;
-          hud.setSubjects(d.subjects, state.subjectId);
-          beat();   // 책상 위 책 더미(남은 할 일) 갱신
-        },
+        onChange: () => beat(),   // 책상 위 책 더미(남은 할 일) 갱신
       });
       planner.load();
 
@@ -1881,9 +1883,8 @@ data:
         }
         inflight = true;
         try {
-          const subject = planner.data?.subjects.find((s) => s.id === state.subjectId);
           const res = await post(`/rooms/${roomId}/heartbeat`, {
-            seat: state.seat, status: status(), subjectId: state.subjectId, subjectColor: subject?.color,
+            seat: state.seat, status: status(),
           });
           if (closed) return;
           if (res.seatTaken) {
@@ -1895,7 +1896,6 @@ data:
           scene ??= createScene(hud.stage, {
             seatCount: res.room.max,
             onSeatClick: (seat) => change({ seat }),
-            onDaylight: (d) => hud.setDaylight(d),
           });
           scene.update(res.members, ctx.user.id, true);
           hud.setRoom(res.room);
@@ -1924,6 +1924,7 @@ data:
       const leaveBeacon = () => navigator.sendBeacon(`/api/rooms/${roomId}/leave`);
       addEventListener('pagehide', leaveBeacon);
       hud.renderControls(state, status());
+      renderTimer();
       beat();
       const timers = [setInterval(beat, HEARTBEAT_MS), setInterval(renderTimer, 1000)];
 
@@ -1963,6 +1964,12 @@ data:
     .room-screen .seg.on { background: var(--amber); border-color: var(--amber); color: #2a1a0e; }
     .room-screen input, .room-screen select { background: rgba(255, 240, 220, 0.08); border: 1px solid var(--glass-line); color: var(--cream); }
     .room-screen option, .room-screen optgroup { color: #2a1a0e; }
+    /* 기본 화살표는 브라우저마다 칸 밖으로 밀려나므로 직접 그려 안쪽에 고정한다 */
+    .room-screen select {
+      appearance: none; padding-right: 34px;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8'%3E%3Cpath d='M1 1.5l5 5 5-5' fill='none' stroke='%23f6e7cf' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+      background-repeat: no-repeat; background-position: right 12px center; background-size: 12px 8px;
+    }
     .room-screen .badge, .room-screen .chip { background: rgba(255, 230, 190, 0.14); color: var(--cream); }
     .room-screen .badge.private { background: rgba(240, 166, 74, 0.25); }
 
@@ -1986,14 +1993,19 @@ data:
     .name-tag.AWAY { color: #ffb4a0; }
 
     .room-top {
-      position: absolute; top: 12px; left: 16px; right: 16px;
+      position: absolute; top: 14px; left: 16px; right: 16px;
       display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap;
       pointer-events: none;
     }
     .room-top > * { pointer-events: auto; }
-    .room-title { display: flex; align-items: center; gap: 10px; font-family: var(--font-title); font-size: 1.3rem; text-shadow: 0 2px 8px #000; }
+    .room-title { display: flex; align-items: center; gap: 10px; font-family: var(--font-title); font-size: 1.2rem; text-shadow: 0 2px 8px #000; }
+    .room-tools { gap: 6px; }
+    .room-tools .btn { width: 96px; text-align: center; }
+    /* 밝은 벽 위에서도 보이도록 상단 버튼에는 유리 배경을 깐다 */
+    .room-top .btn.ghost { background: var(--glass); backdrop-filter: blur(6px); }
+    .room-tools .btn[aria-pressed='true'] { background: rgba(240, 166, 74, 0.25); border-color: var(--amber); }
 
-    .panel { position: absolute; top: 64px; width: 290px; max-height: calc(100% - 300px); overflow: auto; padding: 14px; }
+    .panel { position: absolute; top: 64px; width: 290px; max-height: calc(100% - 200px); overflow: auto; padding: 14px; }
     .panel.left { left: 16px; }
     .panel.right { right: 16px; }
     .panel.hidden { display: none; }
@@ -2013,23 +2025,40 @@ data:
     .dot-status.AWAY { background: #ff7b5c; }
     .dot-status.BREAK { background: #f0c75e; }
 
-    /* 왼쪽 아래 큰 타이머 */
-    .session { position: absolute; left: 28px; bottom: 22px; pointer-events: none; text-shadow: 0 2px 12px rgba(0, 0, 0, 0.7); }
-    .session-label { display: flex; align-items: center; gap: 8px; font-size: 1.05rem; letter-spacing: 2px; opacity: 0.9; }
-    .timer { font-family: var(--font-title); font-size: 4.2rem; line-height: 1; letter-spacing: 2px; font-variant-numeric: tabular-nums; color: #fff8ec; }
+    /* 자리에 앉기 전 안내: 화면 정중앙 (클릭은 뒤의 3D 장면으로 통과) */
+    .seat-hint {
+      position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); pointer-events: none;
+      padding: 10px 22px; border-radius: 999px; background: var(--glass); border: 1px solid var(--glass-line);
+      font: 1.15rem var(--font-title); color: var(--cream); white-space: nowrap; backdrop-filter: blur(6px);
+    }
+    .seat-hint[hidden] { display: none; }
+
+    /* 왼쪽 아래: 지금 시간 · 오늘의 공부를 같은 크기로 위아래 */
+    .session {
+      position: absolute; left: 28px; bottom: 22px; display: flex; flex-direction: column; gap: 14px;
+      pointer-events: none; text-shadow: 0 2px 12px rgba(0, 0, 0, 0.7);
+    }
+    .session-label { display: flex; align-items: center; gap: 8px; min-height: 24px; margin-bottom: 4px; font-size: 1.05rem; letter-spacing: 2px; opacity: 0.9; }
+    .timer { font-family: var(--font-title); font-size: 3.2rem; line-height: 1; letter-spacing: 2px; font-variant-numeric: tabular-nums; color: #fff8ec; }
+
+    /* 하단 가운데 도크: 과목 · 시작/휴식 · 감지 모드 · 카메라 */
     .status-pill { font-family: var(--font-title); font-size: 0.8rem; letter-spacing: 0; padding: 2px 10px; border-radius: 999px; background: rgba(255, 240, 220, 0.14); }
     .status-pill.STUDYING { background: rgba(143, 209, 106, 0.25); color: #c9f0ad; }
     .status-pill.AWAY { background: rgba(255, 123, 92, 0.25); color: #ffc2b0; }
     .status-pill.BREAK { background: rgba(240, 199, 94, 0.25); color: #ffe39a; }
 
     .dock {
-      position: absolute; right: 16px; bottom: 16px;
-      display: flex; align-items: center; gap: 16px; padding: 12px 16px; max-width: calc(100% - 380px);
-      flex-wrap: wrap; justify-content: flex-end;
+      position: absolute; left: 50%; bottom: 16px; transform: translateX(-50%);
+      display: flex; align-items: center; gap: 20px; padding: 12px 18px; max-width: calc(100% - 32px);
+      flex-wrap: wrap; justify-content: center;
     }
-    .dock-subject { display: flex; flex-direction: column; gap: 2px; min-width: 150px; }
-    .controls { display: flex; flex-direction: column; gap: 6px; align-items: center; }
-    .controls .mode .seg { padding: 3px 10px; font-size: 0.85rem; }
+    .controls { display: flex; flex-direction: column; gap: 8px; width: 220px; }
+    .controls .mode { display: grid; grid-template-columns: 1fr 1fr; }
+    .controls .mode .seg { padding: 6px 0; font-size: 0.85rem; border-radius: 0; }
+    .controls .mode .seg:first-child { border-radius: 999px 0 0 999px; }
+    .controls .mode .seg:last-child { border-radius: 0 999px 999px 0; border-left: 0; }
+    .controls .actions { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+    .controls .btn { width: 100%; }
     .camera { position: relative; display: flex; align-items: center; }
     .camera video { width: 112px; height: 84px; object-fit: cover; border-radius: 12px; transform: scaleX(-1); border: 2px solid var(--glass-line); }
     .camera .led { position: absolute; top: 6px; right: 6px; width: 12px; height: 12px; border-radius: 50%; background: #6d6157; border: 2px solid #fff; }
@@ -2039,16 +2068,22 @@ data:
     .camera.detected .camera-note { color: #c9f0ad; }
     .camera.detected video { border-color: #8fd16a; }
 
+    /* 타이머와 겹치지 않게, 화면이 좁으면 도크를 오른쪽으로 비킨다 */
+    @media (max-width: 1180px) {
+      .dock { left: auto; right: 16px; transform: none; }
+    }
     @media (max-width: 860px) {
       .room-screen { overflow: auto; display: flex; flex-direction: column; }
       .room-screen > * { flex: none; }
       .room-top { order: -1; position: static; padding: 12px 16px 0; }
+      .seat-hint { top: calc(46vh / 2 + 56px); font-size: 0.95rem; }
       .stage { position: relative; height: 46vh; }
-      .session { position: absolute; top: calc(46vh + 20px); left: 24px; bottom: auto; }
-      .timer { font-size: 2.6rem; }
       .name-tag { font-size: 10px; padding: 1px 7px; }
       .panel { position: static; width: auto; max-height: none; margin: 8px 16px; }
-      .dock { position: static; margin: 8px 16px 16px; max-width: none; justify-content: center; }
+      .session { position: absolute; top: calc(46vh + 20px); left: 24px; bottom: auto; }
+      .session { gap: 10px; }
+      .timer { font-size: 2.2rem; }
+      .dock { position: static; transform: none; margin: 8px 16px 16px; max-width: none; }
     }
   rooms-view.js: |
     // 공부방 페이지: 방 목록 · 방 만들기(모달) · 비공개방 코드 입장
