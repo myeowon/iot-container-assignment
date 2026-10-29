@@ -98,7 +98,7 @@ export function createHud(on) {
       cameraBox.replaceChildren(...(video ? [video, h('i', { class: 'led' }), cameraNote] : message ? [h('small', {}, message)] : []));
     },
 
-    /** 1분마다 감지 결과: 표시등 + "얼굴 인식됨 · 87%" 처럼 점수까지 보여 준다 */
+    /** 감지 결과마다: 표시등 + "얼굴 인식됨 · 87%" 처럼 점수까지 보여 준다 */
     setDetected({ detected, score, error }) {
       cameraBox.classList.toggle('detected', detected);
       cameraNote.textContent = error ? `감지 오류: ${error}`
