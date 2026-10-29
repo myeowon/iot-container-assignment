@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 import { deskProps, phone, stackBooks } from './character-props.js';
 import { capsule, plush, sphere } from './mesh.js';
-import { STATUS, characterOf, fill, h } from './ui.js';
+import { STATUS, characterOf, fill, fmtShort, h } from './ui.js';
 
 const SHIRTS = ['#7fa7c9', '#d98a7a', '#8fb380', '#a993c4', '#d9b25f', '#6fb0b8'];
 const INK = '#2b211c';
@@ -132,14 +132,15 @@ export function createCharacter(member, { withProps = true } = {}) {
   let labelKey = '';
   const pose = { ...POSES.IDLE(0) };
 
-  /** 이름표: 1줄 상태+이름, 2줄 지금 시각에 계획된 과목·할 일 (플래너 시간표) */
+  /** 이름표: 1줄 상태+이름+오늘 공부한 시간, 2줄 지금 공부하는 과목·할 일 */
   function drawLabel(m) {
     const plan = m.plan && `${m.plan.name}${m.plan.task ? ` · ${m.plan.task}` : ''}`;
-    const key = `${status}|${m.name}|${plan}`;
+    const studied = m.todaySec != null ? fmtShort(m.todaySec) : '';   // 분 단위라 1분마다만 다시 그린다
+    const key = `${status}|${m.name}|${studied}|${plan}`;
     if (key === labelKey) return;
     labelKey = key;
     fill(label,
-      h('span', {}, `${STATUS[status].emoji} ${m.name}`),
+      h('span', {}, `${STATUS[status].emoji} ${m.name}`, studied && h('b', { class: 'studied' }, studied)),
       plan && h('small', { class: 'plan', style: `--c:${m.plan.color}` }, h('i', { class: 'dot' }), plan));
   }
 

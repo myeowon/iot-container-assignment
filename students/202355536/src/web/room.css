@@ -42,6 +42,7 @@
   font: 11px var(--font-body); color: var(--cream);
 }
 .name-tag .plan .dot { width: 7px; height: 7px; }
+.name-tag .studied { margin-left: 6px; font: 600 11px var(--font-body); color: var(--amber); font-variant-numeric: tabular-nums; }
 .name-tag.AWAY { color: #ffb4a0; }
 
 .room-top {
