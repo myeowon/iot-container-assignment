@@ -4,11 +4,10 @@
 const MEDIAPIPE = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14';
 const MODEL = 'https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/1/blaze_face_short_range.tflite';
 
-const INTERVAL_MS = 5000;   // 5초마다 한 번 감지
+const INTERVAL_MS = 60_000; // 1분마다 한 번 감지 (가볍게)
 const INPUT_SIZE = 256;     // 모델에 넣을 정사각형 크기
 const MIN_SCORE = 0.4;      // 이 점수 이상이면 얼굴이 있다고 본다
-const WINDOW = 6;           // 최근 6번의 결과 중
-const THRESHOLD = 4;        // 4번 이상 같으면 상태를 바꾼다 (순간적인 오탐에 흔들리지 않게)
+const AWAY_AFTER = 2;       // 연속 2번(약 1~2분) 안 보이면 자리 비움. 한 번 놓친 것으로는 바꾸지 않는다
 
 /**
  * @param onChange(present: boolean)  상태가 바뀔 때만 호출
@@ -19,7 +18,7 @@ export async function startPresence({ onChange, onSample }) {
   const fileset = await FilesetResolver.forVisionTasks(`${MEDIAPIPE}/wasm`);
   const detector = await FaceDetector.createFromOptions(fileset, {
     baseOptions: { modelAssetPath: MODEL, delegate: 'CPU' },
-    runningMode: 'IMAGE',          // 5초에 한 장씩 판정하므로 이미지 모드 (입력 크기가 달라도 된다)
+    runningMode: 'IMAGE',          // 1분에 한 장씩 판정하므로 이미지 모드 (입력 크기가 달라도 된다)
     minDetectionConfidence: 0.1,   // 낮은 점수도 받아서 화면에 보여 주고, 판정은 MIN_SCORE로 한다
   });
 
@@ -38,7 +37,7 @@ export async function startPresence({ onChange, onSample }) {
     return canvas;
   }
 
-  const history = [];
+  let misses = 0;
   let present = true;   // 공부 시작 직후에는 자리에 있다고 본다
 
   const bestScore = (image) =>
@@ -59,14 +58,11 @@ export async function startPresence({ onChange, onSample }) {
   function sample() {
     if (video.readyState < 2) return;
     const result = look();
-    const { detected } = result;
-    history.push(detected);
-    if (history.length > WINDOW) history.shift();
     onSample?.(result);
 
-    const hits = history.filter(Boolean).length;
-    const misses = history.length - hits;
-    const next = hits >= THRESHOLD ? true : misses >= THRESHOLD ? false : present;
+    // 돌아오면 한 번만 보여도 바로 공부 중으로, 자리 비움은 연속으로 안 보일 때만
+    misses = result.detected ? 0 : misses + 1;
+    const next = result.detected ? true : misses >= AWAY_AFTER ? false : present;
     if (next !== present) {
       present = next;
       onChange(present);
