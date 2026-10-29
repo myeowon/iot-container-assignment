@@ -39,12 +39,14 @@ export function createHud(on) {
     seatHint,
     plannerPanel,
     membersPanel,
-    h('div', { class: 'session' },
-      h('div', {}, h('div', { class: 'session-label' }, '지금 시간'), clock),
-      h('div', {}, h('div', { class: 'session-label' }, '오늘의 공부', statusPill), timer)),
-    h('footer', { class: 'dock card' },
-      controls,
-      cameraBox));
+    // 하단 줄: 왼쪽 시간 묶음 · 오른쪽 도크. 화면이 좁으면 도크가 아랫줄로 내려간다
+    h('div', { class: 'room-bottom' },
+      h('div', { class: 'session' },
+        h('div', {}, h('div', { class: 'session-label' }, '지금 시간'), clock),
+        h('div', {}, h('div', { class: 'session-label' }, '오늘의 공부', statusPill), timer)),
+      h('footer', { class: 'dock card' },
+        controls,
+        cameraBox)));
 
   return {
     el,

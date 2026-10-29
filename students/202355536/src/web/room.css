@@ -92,25 +92,26 @@
 }
 .seat-hint[hidden] { display: none; }
 
-/* 왼쪽 아래: 지금 시간 · 오늘의 공부를 같은 크기로 위아래 */
-.session {
-  position: absolute; left: 28px; bottom: 22px; display: flex; flex-direction: column; gap: 14px;
-  pointer-events: none; text-shadow: 0 2px 12px rgba(0, 0, 0, 0.7);
+/* 하단 줄: 왼쪽 아래 시간 묶음 · 오른쪽 아래 도크 (좁으면 도크가 아랫줄로) */
+.room-bottom {
+  position: absolute; left: 28px; right: 16px; bottom: 16px;
+  display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-end; gap: 16px;
+  pointer-events: none;
 }
+.room-bottom > .dock { pointer-events: auto; margin-left: auto; }
+
+/* 지금 시간 · 오늘의 공부를 같은 크기로 위아래 */
+.session { display: flex; flex-direction: column; gap: 14px; padding-bottom: 6px; text-shadow: 0 2px 12px rgba(0, 0, 0, 0.7); }
 .session-label { display: flex; align-items: center; gap: 8px; min-height: 24px; margin-bottom: 4px; font-size: 1.05rem; letter-spacing: 2px; opacity: 0.9; }
 .timer { font-family: var(--font-title); font-size: 3.2rem; line-height: 1; letter-spacing: 2px; font-variant-numeric: tabular-nums; color: #fff8ec; }
 
-/* 하단 가운데 도크: 과목 · 시작/휴식 · 감지 모드 · 카메라 */
 .status-pill { font-family: var(--font-title); font-size: 0.8rem; letter-spacing: 0; padding: 2px 10px; border-radius: 999px; background: rgba(255, 240, 220, 0.14); }
 .status-pill.STUDYING { background: rgba(143, 209, 106, 0.25); color: #c9f0ad; }
 .status-pill.AWAY { background: rgba(255, 123, 92, 0.25); color: #ffc2b0; }
 .status-pill.BREAK { background: rgba(240, 199, 94, 0.25); color: #ffe39a; }
 
-.dock {
-  position: absolute; left: 50%; bottom: 16px; transform: translateX(-50%);
-  display: flex; align-items: center; gap: 20px; padding: 12px 18px; max-width: calc(100% - 32px);
-  flex-wrap: wrap; justify-content: center;
-}
+/* 도크: 감지 모드 · 시작/휴식 · 카메라 */
+.dock { display: flex; align-items: center; justify-content: center; gap: 20px; padding: 12px 18px; }
 .controls { display: flex; flex-direction: column; gap: 8px; width: 220px; }
 .controls .mode { display: grid; grid-template-columns: 1fr 1fr; }
 .controls .mode .seg { padding: 6px 0; font-size: 0.85rem; border-radius: 0; }
@@ -123,24 +124,26 @@
 .camera .led { position: absolute; top: 6px; right: 6px; width: 12px; height: 12px; border-radius: 50%; background: #6d6157; border: 2px solid #fff; }
 .camera.detected .led { background: #4caf50; }
 .camera { flex-direction: column; gap: 4px; }
+.camera:empty { display: none; }   /* 자리 감지를 켜기 전에는 도크에 빈 간격을 남기지 않는다 */
 .camera-note { font-size: 0.72rem; white-space: nowrap; }
 .camera.detected .camera-note { color: #c9f0ad; }
 .camera.detected video { border-color: #8fd16a; }
 
-/* 타이머와 겹치지 않게, 화면이 좁으면 도크를 오른쪽으로 비킨다 */
-@media (max-width: 1180px) {
-  .dock { left: auto; right: 16px; transform: none; }
-}
+/* 좁은 화면도 같은 배치를 쓰고 크기만 줄인다 */
 @media (max-width: 860px) {
-  .room-screen { overflow: auto; display: flex; flex-direction: column; }
-  .room-screen > * { flex: none; }
-  .room-top { order: -1; position: static; padding: 12px 16px 0; }
-  .seat-hint { top: calc(46vh / 2 + 56px); font-size: 0.95rem; }
-  .stage { position: relative; height: 46vh; }
+  .room-top { top: 10px; left: 12px; right: 12px; }
+  .room-tools .btn { width: 84px; }
+  .seat-hint { font-size: 0.95rem; }
   .name-tag { font-size: 10px; padding: 1px 7px; }
-  .panel { position: static; width: auto; max-height: none; margin: 8px 16px; }
-  .session { position: absolute; top: calc(46vh + 20px); left: 24px; bottom: auto; }
-  .session { gap: 10px; }
+  .panel { width: min(290px, calc(100% - 24px)); max-height: calc(100% - 300px); }
+  .panel.left { left: 12px; }
+  .panel.right { right: 12px; }
+  .room-bottom { left: 16px; right: 12px; bottom: 12px; gap: 12px; }
+  .session { gap: 8px; padding-bottom: 0; }
+  .session-label { font-size: 0.9rem; }
   .timer { font-size: 2.2rem; }
-  .dock { position: static; transform: none; margin: 8px 16px 16px; max-width: none; }
+}
+@media (max-width: 560px) {
+  .room-bottom > .dock { flex: 1 1 100%; }
+  .controls { width: 100%; }
 }
