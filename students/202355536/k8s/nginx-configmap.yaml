@@ -1,0 +1,18 @@
+# 자동 생성 파일 — src/nginx/ 를 수정한 뒤 scripts/gen_configmaps.py 로 다시 생성
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: studyroom-nginx
+  labels:
+    app: studyroom
+    component: web
+data:
+  api-proxy.conf: |
+    # /api/ 요청은 api Service로 프록시, 나머지는 정적 파일 제공
+    location /api/ {
+        proxy_pass http://studyroom-api:8080;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_read_timeout 30s;
+    }

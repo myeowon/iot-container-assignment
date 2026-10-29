@@ -1,0 +1,913 @@
+# 자동 생성 파일 — src/api/ 를 수정한 뒤 scripts/gen_configmaps.py 로 다시 생성
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: studyroom-api-code
+  labels:
+    app: studyroom
+    component: api
+data:
+  auth.py: |
+    """아이디+비밀번호 가입/로그인과 서명 쿠키 세션."""
+    import hashlib
+    import hmac
+    import os
+    import re
+    import secrets
+
+    from common import ApiError, db, new_id, now, rate_limited, text
+    from study import study_today
+
+    SESSION_SECRET = os.environ.get("SESSION_SECRET", "dev-only-secret").encode()
+    COOKIE_SECURE = os.environ.get("COOKIE_SECURE", "1") == "1"
+    SESSION_SECONDS = 30 * 24 * 3600
+    PBKDF2_ROUNDS = 200_000
+    CHARACTERS = ("bear", "rabbit", "cat-black", "cat-white", "dog")
+
+
+    def hash_password(password, salt_hex):
+        return hashlib.pbkdf2_hmac(
+            "sha256", password.encode(), bytes.fromhex(salt_hex), PBKDF2_ROUNDS
+        ).hex()
+
+
+    def _sign(payload):
+        return hmac.new(SESSION_SECRET, payload.encode(), hashlib.sha256).hexdigest()
+
+
+    def sign_session(uid):
+        payload = f"{uid}.{int(now()) + SESSION_SECONDS}"
+        return f"{payload}.{_sign(payload)}"
+
+
+    def verify_session(token):
+        """쿠키 값 → uid. 서명이 틀리거나 만료됐으면 None."""
+        try:
+            payload, sig = token.rsplit(".", 1)
+            uid, exp = payload.split(".")
+            if hmac.compare_digest(sig, _sign(payload)) and int(exp) >= now():
+                return uid
+        except ValueError:
+            pass
+        return None
+
+
+    def session_cookie(value, max_age):
+        cookie = f"sid={value}; Path=/; HttpOnly; SameSite=Lax; Max-Age={max_age}"
+        return cookie + ("; Secure" if COOKIE_SECURE else "")
+
+
+    def character_of(u):
+        """사용자의 캐릭터 id. 캐릭터 필드가 생기기 전 계정(animal 필드)도 비슷한 캐릭터로 바꿔 준다."""
+        if u.get("character") in CHARACTERS:
+            return u["character"]
+        old = u.get("animal")
+        return "cat-black" if old == "cat" else old if old in CHARACTERS else "bear"
+
+
+    def public_user(uid, u):
+        return {"id": uid, "username": u["username"], "name": u["name"], "character": character_of(u)}
+
+
+    def signup(req):
+        b = req.body
+        username = str(b.get("username") or "").strip().lower()
+        if not re.fullmatch(r"[a-z0-9]{3,20}", username):
+            raise ApiError(400, "아이디는 영문 소문자·숫자 3~20자예요")
+        password = str(b.get("password") or "")
+        if not 6 <= len(password) <= 72:
+            raise ApiError(400, "비밀번호는 6~72자로 입력해 주세요")
+        name = text(b, "name", 1, 12, "닉네임")
+
+        uid = "u" + new_id()
+        # SET NX: 같은 아이디가 동시에 가입되는 것을 막는다
+        if not db.set(f"username:{username}", uid, "NX"):
+            raise ApiError(409, "이미 사용 중인 아이디예요")
+        salt = secrets.token_hex(16)
+        # 캐릭터는 가입할 때 랜덤으로 주고, 로그인 후 닉네임 옆에서 바꿀 수 있다
+        user = {"username": username, "name": name, "character": secrets.choice(CHARACTERS),
+                "pw_salt": salt, "pw_hash": hash_password(password, salt), "created": int(now())}
+        db.hset(f"user:{uid}", user)
+        req.login(uid)
+        return {"user": public_user(uid, user)}
+
+
+    def login(req):
+        username = str(req.body.get("username") or "").strip().lower()
+        password = str(req.body.get("password") or "")
+        if rate_limited(f"rl:login:{username}", 10):
+            raise ApiError(429, "로그인 시도가 너무 많아요. 1분 뒤 다시 시도해 주세요")
+        uid = db.get(f"username:{username}") if username else None
+        u = db.hgetall(f"user:{uid}") if uid else {}
+        if not u or not hmac.compare_digest(hash_password(password, u["pw_salt"]), u["pw_hash"]):
+            raise ApiError(401, "아이디 또는 비밀번호가 맞지 않아요")
+        req.login(uid)
+        return {"user": public_user(uid, u)}
+
+
+    def logout(req):
+        req.logout()
+        return {"ok": True}
+
+
+    def me(req):
+        return {"user": public_user(req.uid, req.user), "today": study_today(req.uid)}
+
+
+    def update_me(req):
+        """캐릭터 바꾸기"""
+        character = req.body.get("character")
+        if character not in CHARACTERS:
+            raise ApiError(400, "없는 캐릭터예요")
+        db.hset(f"user:{req.uid}", {"character": character})
+        req.user["character"] = character
+        return {"user": public_user(req.uid, req.user)}
+  common.py: |
+    """모듈 공통: 설정값, Redis 연결, 에러 타입, 입력 검증 유틸."""
+    import os
+    import re
+    import secrets
+    import time
+    from datetime import datetime, timedelta, timezone
+
+    from redis_client import Redis
+
+    KST = timezone(timedelta(hours=9))
+    HEX_COLOR = re.compile(r"#[0-9a-fA-F]{6}")
+
+    db = Redis(
+        os.environ.get("REDIS_HOST", "localhost"),
+        os.environ.get("REDIS_PORT", "6379"),
+        os.environ.get("REDIS_PASSWORD") or None,
+    )
+
+
+    class ApiError(Exception):
+        def __init__(self, status, message):
+            super().__init__(message)
+            self.status = status
+            self.message = message
+
+
+    def now():
+        return time.time()
+
+
+    def today():
+        """공부시간·데일리 플래너의 날짜 기준 (서버 TZ와 무관하게 KST)."""
+        return days_ago(0)
+
+
+    def days_ago(n):
+        return (datetime.now(KST) - timedelta(days=n)).strftime("%Y%m%d")
+
+
+    def past_day(value):
+        """YYYYMMDD 형식이고 오늘 이전(오늘 포함)인 날짜만 받는다. 아니면 오늘."""
+        value = str(value or "")
+        return value if re.fullmatch(r"\d{8}", value) and value <= today() else today()
+
+
+    def slot_of(ts=None):
+        """시각 → 10분 칸 번호 (0:00~0:09 → 0, 23:50~23:59 → 143). 플래너 시간표 단위."""
+        t = datetime.fromtimestamp(ts if ts is not None else time.time(), KST)
+        return (t.hour * 60 + t.minute) // 10
+
+
+    def new_id(n=6):
+        return secrets.token_hex(n)
+
+
+    def rate_limited(key, limit, window=60):
+        n = db.execute("INCR", key)
+        if n == 1:
+            db.execute("EXPIRE", key, window)
+        return n > limit
+
+
+    def text(body, field, lo, hi, label):
+        v = str(body.get(field) or "").strip()
+        if not lo <= len(v) <= hi:
+            raise ApiError(400, f"{label}은(는) {lo}~{hi}자로 입력해 주세요")
+        return v
+
+
+    def color(body, field="color"):
+        v = str(body.get(field) or "")
+        if not HEX_COLOR.fullmatch(v):
+            raise ApiError(400, "색상 값이 올바르지 않아요")
+        return v.lower()
+
+
+    def optional(value, kind):
+        """선택 입력값: 형식이 맞으면 그대로, 아니면 None."""
+        if kind == "color":
+            return value.lower() if isinstance(value, str) and HEX_COLOR.fullmatch(value) else None
+        return value if isinstance(value, kind) else None
+  planner.py: |
+    """플래너: 과목 → 할 일(과목별 백로그) → 데일리 플래너(그날 할 일 선택). 지난 날짜는 조회만 한다.
+
+    planner:{uid}            JSON {subjects: [...], tasks: [...]}
+    daily:{uid}:{YYYYMMDD}   JSON {goalMin, taskIds, memo, timetable}
+    시간표·D-DAY는 schedule.py
+    """
+    import json
+    import threading
+
+    from common import ApiError, color, days_ago, db, new_id, past_day, text, today
+    from study import study_on
+
+    MAX_SUBJECTS = 20
+    MAX_TASKS = 300
+    HISTORY_DAYS = 7
+    lock = threading.Lock()   # 같은 사용자의 동시 수정이 서로 덮어쓰지 않도록
+
+
+    def load(uid):
+        raw = db.get(f"planner:{uid}")
+        return json.loads(raw) if raw else {"subjects": [], "tasks": []}
+
+
+    def new_daily():
+        return {"goalMin": 120, "taskIds": [], "memo": "", "timetable": {}}
+
+
+    def load_daily(uid, day=None):
+        """예전 데이터에 없는 필드는 기본값으로 채운다"""
+        raw = db.get(f"daily:{uid}:{day or today()}")
+        return {**new_daily(), **(json.loads(raw) if raw else {})}
+
+
+    def save(uid, planner=None, daily=None):
+        if planner is not None:
+            db.set(f"planner:{uid}", json.dumps(planner, ensure_ascii=False))
+        if daily is not None:
+            db.set(f"daily:{uid}:{today()}", json.dumps(daily))
+
+
+    def view(uid, planner=None, daily=None, day=None):
+        """day의 플래너 (기본: 오늘). editable은 오늘일 때만 True"""
+        day = day or today()
+        p = planner or load(uid)
+        d = daily or load_daily(uid, day)
+        return {"subjects": p["subjects"], "tasks": p["tasks"], "dday": p.get("dday"), "editable": day == today(),
+                "day": {"date": day, **d}, "study": study_on(uid, day)}
+
+
+    def find(items, item_id, label):
+        for it in items:
+            if it["id"] == item_id:
+                return it
+        raise ApiError(404, f"{label}을(를) 찾을 수 없어요")
+
+
+    def desk_books(uid):
+        """오늘 남은 할 일의 과목 색 목록 → 3D 책상 위 책 더미."""
+        p, d = load(uid), load_daily(uid)
+        colors = {s["id"]: s["color"] for s in p["subjects"]}
+        tasks = {t["id"]: t for t in p["tasks"]}
+        left = [tasks[i] for i in d["taskIds"] if i in tasks and not tasks[i]["done"]]
+        return [colors.get(t["subjectId"], "#c8a27a") for t in left][:6]
+
+
+    # ---------- 핸들러 ----------
+
+    def get_planner(req):
+        """?date=YYYYMMDD 로 지난 날짜도 볼 수 있다"""
+        return view(req.uid, day=past_day(req.query.get("date")))
+
+
+    def history(req):
+        """최근 7일 요약: 공부시간, 목표, 그날 담은 할 일 수, 그날 완료한 할 일 수"""
+        tasks = load(req.uid)["tasks"]
+        days = []
+        for n in range(HISTORY_DAYS - 1, -1, -1):
+            day = days_ago(n)
+            d = load_daily(req.uid, day)
+            days.append({"date": day, "goalMin": d["goalMin"], "totalSec": study_on(req.uid, day)["totalSec"],
+                         "planned": len(d["taskIds"]), "done": sum(t["doneAt"] == day for t in tasks)})
+        return {"days": days}
+
+
+    def create_subject(req):
+        with lock:
+            p = load(req.uid)
+            if len(p["subjects"]) >= MAX_SUBJECTS:
+                raise ApiError(400, f"과목은 {MAX_SUBJECTS}개까지 만들 수 있어요")
+            p["subjects"].append({"id": new_id(4), "color": color(req.body),
+                                  "name": text(req.body, "name", 1, 20, "과목 이름")})
+            save(req.uid, p)
+            return view(req.uid, p)
+
+
+    def update_subject(req, sid):
+        with lock:
+            p = load(req.uid)
+            s = find(p["subjects"], sid, "과목")
+            if "name" in req.body:
+                s["name"] = text(req.body, "name", 1, 20, "과목 이름")
+            if "color" in req.body:
+                s["color"] = color(req.body)
+            save(req.uid, p)
+            return view(req.uid, p)
+
+
+    def delete_subject(req, sid):
+        """과목을 지우면 그 과목의 할 일과 오늘 목록의 항목도 함께 지운다."""
+        with lock:
+            p, d = load(req.uid), load_daily(req.uid)
+            find(p["subjects"], sid, "과목")
+            gone = {t["id"] for t in p["tasks"] if t["subjectId"] == sid}
+            p["subjects"] = [s for s in p["subjects"] if s["id"] != sid]
+            p["tasks"] = [t for t in p["tasks"] if t["id"] not in gone]
+            d["taskIds"] = [t for t in d["taskIds"] if t not in gone]
+            save(req.uid, p, d)
+            return view(req.uid, p, d)
+
+
+    def create_task(req):
+        with lock:
+            p = load(req.uid)
+            sid = req.body.get("subjectId")
+            find(p["subjects"], sid, "과목")
+            if len(p["tasks"]) >= MAX_TASKS:
+                raise ApiError(400, f"할 일은 {MAX_TASKS}개까지 만들 수 있어요")
+            task = {"id": new_id(4), "subjectId": sid, "done": False, "doneAt": None,
+                    "title": text(req.body, "title", 1, 50, "할 일")}
+            p["tasks"].append(task)
+            d = None
+            if req.body.get("addToday"):
+                d = load_daily(req.uid)
+                d["taskIds"].append(task["id"])
+            save(req.uid, p, d)
+            return view(req.uid, p, d)
+
+
+    def update_task(req, tid):
+        with lock:
+            p = load(req.uid)
+            t = find(p["tasks"], tid, "할 일")
+            if "title" in req.body:
+                t["title"] = text(req.body, "title", 1, 50, "할 일")
+            if "done" in req.body:
+                t["done"] = bool(req.body["done"])
+                t["doneAt"] = today() if t["done"] else None
+            save(req.uid, p)
+            return view(req.uid, p)
+
+
+    def delete_task(req, tid):
+        with lock:
+            p, d = load(req.uid), load_daily(req.uid)
+            find(p["tasks"], tid, "할 일")
+            p["tasks"] = [t for t in p["tasks"] if t["id"] != tid]
+            d["taskIds"] = [t for t in d["taskIds"] if t != tid]
+            save(req.uid, p, d)
+            return view(req.uid, p, d)
+
+
+    def put_daily(req):
+        """오늘 목표 시간, 오늘 할 일 목록(과목 백로그에서 고른 task id), 오늘의 한마디를 저장."""
+        with lock:
+            p, d = load(req.uid), load_daily(req.uid)
+            if "goalMin" in req.body:
+                try:
+                    d["goalMin"] = max(0, min(1440, int(req.body["goalMin"])))
+                except (TypeError, ValueError):
+                    raise ApiError(400, "목표 시간이 올바르지 않아요")
+            if isinstance(req.body.get("taskIds"), list):
+                valid = {t["id"] for t in p["tasks"]}
+                d["taskIds"] = list(dict.fromkeys(i for i in req.body["taskIds"] if i in valid))
+            if "memo" in req.body:
+                d["memo"] = text(req.body, "memo", 0, 200, "한마디")
+            save(req.uid, daily=d)
+            return view(req.uid, p, d)
+  redis_client.py: |
+    """표준 라이브러리만으로 구현한 최소 Redis(RESP2) 클라이언트.
+
+    - 스레드마다 연결 하나를 유지한다 (ThreadingHTTPServer 대응).
+    - 연결이 끊기면 한 번 재연결 후 재시도한다.
+    - 처음 명령을 보낼 때 연결하므로 Redis가 늦게 떠도 서버가 죽지 않는다.
+    """
+    import socket
+    import threading
+
+
+    class RedisError(Exception):
+        pass
+
+
+    class Redis:
+        def __init__(self, host, port=6379, password=None, timeout=5):
+            self.host = host
+            self.port = int(port)
+            self.password = password
+            self.timeout = timeout
+            self._local = threading.local()
+
+        def _connect(self):
+            sock = socket.create_connection((self.host, self.port), timeout=self.timeout)
+            conn = (sock, sock.makefile("rb"))
+            if self.password:
+                self._send(conn, ("AUTH", self.password))
+            self._local.conn = conn
+            return conn
+
+        def _drop(self):
+            conn = getattr(self._local, "conn", None)
+            self._local.conn = None
+            if conn:
+                try:
+                    conn[1].close()
+                    conn[0].close()
+                except OSError:
+                    pass
+
+        def execute(self, *args):
+            for attempt in (0, 1):
+                conn = getattr(self._local, "conn", None)
+                try:
+                    if conn is None:
+                        conn = self._connect()
+                    return self._send(conn, args)
+                except (OSError, ConnectionError):
+                    self._drop()
+                    if attempt:
+                        raise
+
+        def _send(self, conn, args):
+            sock, rfile = conn
+            out = [b"*%d\r\n" % len(args)]
+            for a in args:
+                b = a if isinstance(a, bytes) else str(a).encode()
+                out.append(b"$%d\r\n%s\r\n" % (len(b), b))
+            sock.sendall(b"".join(out))
+            return self._read(rfile)
+
+        def _read(self, rfile):
+            line = rfile.readline()
+            if not line:
+                raise ConnectionError("redis connection closed")
+            kind, rest = line[:1], line[1:-2]
+            if kind == b"+":
+                return rest.decode()
+            if kind == b"-":
+                raise RedisError(rest.decode())
+            if kind == b":":
+                return int(rest)
+            if kind == b"$":
+                n = int(rest)
+                if n < 0:
+                    return None
+                return rfile.read(n + 2)[:-2].decode()
+            if kind == b"*":
+                n = int(rest)
+                if n < 0:
+                    return None
+                return [self._read(rfile) for _ in range(n)]
+            raise RedisError("unknown reply: %r" % line)
+
+        # 자주 쓰는 명령 단축
+        def get(self, k): return self.execute("GET", k)
+        def set(self, k, v, *opts): return self.execute("SET", k, v, *opts)
+        def delete(self, *ks): return self.execute("DEL", *ks)
+        def hget(self, k, f): return self.execute("HGET", k, f)
+        def hset(self, k, mapping):
+            args = []
+            for f, v in mapping.items():
+                args += [f, v]
+            return self.execute("HSET", k, *args)
+        def hdel(self, k, *fs): return self.execute("HDEL", k, *fs)
+        def hincrby(self, k, f, n): return self.execute("HINCRBY", k, f, n)
+
+        def hgetall(self, k):
+            flat = self.execute("HGETALL", k) or []
+            return dict(zip(flat[0::2], flat[1::2]))
+  rooms.py: |
+    """공부방: 생성·목록·코드 입장, 하트비트로 상태 동기화.
+
+    room:{rid}           hash  name, max, private, code, owner, created, last_active
+    rooms                zset  생성 시각순 방 목록
+    code:{CODE}          str   비공개 방 코드 → rid
+    room:{rid}:allowed   set   비공개 방에 들어갈 수 있는 uid
+    presence:{rid}       hash  uid → JSON(seat, status, ts, ...) / STALE_SECONDS 지나면 정리
+    """
+    import json
+    import re
+    import secrets
+    import threading
+
+    from auth import character_of
+    from common import ApiError, db, new_id, now, optional, rate_limited, text
+    from planner import desk_books
+    from schedule import current_plan
+    from study import add_study, study_today, total_today
+
+    STATUSES = ("STUDYING", "AWAY", "BREAK", "IDLE")
+    STALE_SECONDS = 20
+    ROOM_IDLE_DAYS = 3
+    CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"  # 헷갈리는 0/O, 1/I 제외
+    _lock = threading.Lock()   # 좌석 배정·인원 체크를 직렬화 (api replicas=1 전제)
+
+
+    def room_view(rid, r):
+        return {"id": rid, "name": r["name"], "max": int(r["max"]), "private": r["private"] == "1"}
+
+
+    def is_allowed(rid, uid):
+        return bool(db.execute("SISMEMBER", f"room:{rid}:allowed", uid))
+
+
+    def load_room(rid, uid):
+        r = db.hgetall(f"room:{rid}")
+        if not r:
+            raise ApiError(404, "방을 찾을 수 없어요")
+        if r["private"] == "1" and not is_allowed(rid, uid):
+            raise ApiError(403, "비공개 방이에요. 방 코드로 입장해 주세요")
+        return r
+
+
+    def active_members(rid):
+        """presence 해시에서 오래된 항목을 정리하고 현재 인원을 돌려준다."""
+        members, stale = {}, []
+        for uid, raw in db.hgetall(f"presence:{rid}").items():
+            m = json.loads(raw)
+            if now() - m["ts"] > STALE_SECONDS:
+                stale.append(uid)
+            else:
+                members[uid] = m
+        if stale:
+            db.hdel(f"presence:{rid}", *stale)
+        return members
+
+
+    def delete_room(rid, r):
+        db.delete(f"room:{rid}", f"room:{rid}:allowed", f"presence:{rid}")
+        if r.get("code"):
+            db.delete(f"code:{r['code']}")
+        db.execute("ZREM", "rooms", rid)
+
+
+    def new_code(rid):
+        """영문+숫자가 섞인 6자리 코드. SET NX로 중복을 막는다."""
+        while True:
+            code = "".join(secrets.choice(CODE_ALPHABET) for _ in range(6))
+            if re.search(r"[A-Z]", code) and re.search(r"\d", code) and \
+                    db.set(f"code:{code}", rid, "NX"):
+                return code
+
+
+    # ---------- 핸들러 ----------
+
+    def list_rooms(req):
+        """공개 방 + 내가 들어갈 수 있는 비공개 방. 오래 비어 있던 방은 정리한다."""
+        out = []
+        for rid in db.execute("ZREVRANGE", "rooms", 0, 199):
+            r = db.hgetall(f"room:{rid}")
+            if not r:
+                db.execute("ZREM", "rooms", rid)
+                continue
+            count = len(active_members(rid))
+            idle = now() - float(r.get("last_active") or r["created"])
+            if count == 0 and idle > ROOM_IDLE_DAYS * 86400:
+                delete_room(rid, r)
+                continue
+            mine = r["private"] == "1" and is_allowed(rid, req.uid)
+            if r["private"] == "1" and not mine:
+                continue
+            out.append({**room_view(rid, r), "count": count, "code": r["code"] if mine else None})
+        out.sort(key=lambda x: -x["count"])
+        return {"rooms": out[:50]}
+
+
+    def create_room(req):
+        name = text(req.body, "name", 1, 20, "방 이름")
+        max_members = req.body.get("max")
+        if max_members not in (4, 6, 8):
+            raise ApiError(400, "인원은 4, 6, 8명 중에서 골라 주세요")
+        private = bool(req.body.get("private"))
+        rid = new_id(4)
+        code = new_code(rid) if private else ""
+        r = {"name": name, "max": max_members, "private": int(private), "code": code,
+             "owner": req.uid, "created": now(), "last_active": now()}
+        db.hset(f"room:{rid}", r)
+        db.execute("ZADD", "rooms", now(), rid)
+        db.execute("SADD", f"room:{rid}:allowed", req.uid)
+        return {"room": {"id": rid, "name": name, "max": max_members, "private": private,
+                         "code": code or None}}
+
+
+    def join_by_code(req):
+        if rate_limited(f"rl:code:{req.uid}", 10):
+            raise ApiError(429, "코드 입력이 너무 많아요. 1분 뒤 다시 시도해 주세요")
+        code = str(req.body.get("code") or "").strip().upper()
+        rid = db.get(f"code:{code}") if re.fullmatch(r"[A-Z0-9]{6}", code) else None
+        if not rid:
+            raise ApiError(404, "해당 코드의 방이 없어요")
+        db.execute("SADD", f"room:{rid}:allowed", req.uid)
+        return {"roomId": rid}
+
+
+    def heartbeat(req, rid):
+        """3초마다 호출: 내 좌석·상태를 보내고 방 전체 상태를 받는다."""
+        b = req.body
+        with _lock:
+            r = load_room(rid, req.uid)
+            capacity = int(r["max"])
+            members = active_members(rid)
+            prev = members.get(req.uid)
+            if prev is None and len(members) >= capacity:
+                raise ApiError(409, "방이 가득 찼어요")
+
+            seat = optional(b.get("seat"), int)
+            if seat is not None and not 0 <= seat < capacity:
+                seat = None
+            taken = seat is not None and any(
+                m["seat"] == seat for uid, m in members.items() if uid != req.uid)
+            if taken:
+                seat = None
+            status = b.get("status") if b.get("status") in STATUSES else "IDLE"
+            if seat is None:
+                status = "IDLE"   # 자리에 앉아야 공부를 시작할 수 있다
+
+            t = now()
+            plan = current_plan(req.uid)
+            # 과목을 따로 고르지 않았으면 시간표의 지금 계획 과목으로 공부시간을 쌓는다
+            subject_id = optional(b.get("subjectId"), str) or (plan and plan["subjectId"])
+            if prev:
+                add_study(req.uid, prev, t)
+            members[req.uid] = {
+                "seat": seat, "status": status, "ts": t,
+                "subjectId": subject_id,
+                "subjectColor": optional(b.get("subjectColor"), "color") or (plan and plan["color"]),
+                "name": req.user["name"], "character": character_of(req.user),
+                "plan": plan,   # 지금 시각의 계획 → 이름표 아래에 표시
+                "books": desk_books(req.uid),
+            }
+            db.hset(f"presence:{rid}", {req.uid: json.dumps(members[req.uid], ensure_ascii=False)})
+            db.hset(f"room:{rid}", {"last_active": t})
+
+        out = [{"id": uid, **{k: v for k, v in m.items() if k != "ts"}, "todaySec": total_today(uid)}
+               for uid, m in members.items()]
+        return {"room": {**room_view(rid, r), "code": r["code"] or None},
+                "members": out, "seatTaken": taken, "me": study_today(req.uid)}
+
+
+    def leave(req, rid):
+        with _lock:
+            raw = db.hget(f"presence:{rid}", req.uid)
+            if raw:
+                add_study(req.uid, json.loads(raw), now())
+                db.hdel(f"presence:{rid}", req.uid)
+        return {"ok": True}
+  schedule.py: |
+    """플래너 시간표(10분 칸별 공부 계획)·D-DAY·지금 시각의 계획.
+
+    daily:{uid}:{날짜}.timetable   {칸 번호(0~143): subjectId}
+    planner:{uid}.dday             {title, date(YYYYMMDD)}
+    """
+    import re
+
+    import planner
+    from common import ApiError, slot_of, text
+
+    SLOTS = 144   # 하루 24시간 × 10분 칸 6개
+
+
+    def put_timetable(req):
+        """오늘 시간표 저장. 없는 과목이나 범위 밖 칸은 버린다."""
+        cells = req.body.get("timetable")
+        if not isinstance(cells, dict):
+            raise ApiError(400, "시간표 형식이 올바르지 않아요")
+        with planner.lock:
+            p, d = planner.load(req.uid), planner.load_daily(req.uid)
+            subjects = {s["id"] for s in p["subjects"]}
+            d["timetable"] = {str(k): v for k, v in cells.items()
+                              if str(k).isdigit() and int(k) < SLOTS and v in subjects}
+            planner.save(req.uid, daily=d)
+            return planner.view(req.uid, p, d)
+
+
+    def put_dday(req):
+        """D-DAY 설정 (제목이 비어 있으면 해제)"""
+        title = text(req.body, "title", 0, 20, "D-DAY 이름")
+        date = str(req.body.get("date") or "")
+        if title and not re.fullmatch(r"\d{8}", date):
+            raise ApiError(400, "D-DAY 날짜가 올바르지 않아요")
+        with planner.lock:
+            p = planner.load(req.uid)
+            p["dday"] = {"title": title, "date": date} if title else None
+            planner.save(req.uid, p)
+            return planner.view(req.uid, p)
+
+
+    def current_plan(uid):
+        """지금 시각 칸에 계획된 과목과, 오늘 목록에서 그 과목의 아직 안 끝난 첫 할 일 → 공부방 이름표"""
+        p, d = planner.load(uid), planner.load_daily(uid)
+        subject = next((s for s in p["subjects"] if s["id"] == d["timetable"].get(str(slot_of()))), None)
+        if not subject:
+            return None
+        tasks = {t["id"]: t for t in p["tasks"]}
+        task = next((tasks[i] for i in d["taskIds"]
+                     if i in tasks and tasks[i]["subjectId"] == subject["id"] and not tasks[i]["done"]), None)
+        return {"subjectId": subject["id"], "name": subject["name"], "color": subject["color"],
+                "task": task["title"] if task else None}
+  server.py: |
+    """StudyPals API 서버 — Python 표준 라이브러리만 사용 (pip 의존성 없음).
+
+    nginx(web)가 /api/* 요청을 이 서버(8080)로 프록시한다.
+    라우팅과 HTTP 처리만 담당하고, 기능은 모듈별로 나뉘어 있다.
+      auth.py     가입·로그인·세션        planner.py  과목·할 일·데일리 플래너
+      rooms.py    공부방·하트비트         study.py    공부시간 누적
+    """
+    import json
+    import os
+    import re
+    import signal
+    import sys
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    from urllib.parse import parse_qsl, urlparse
+
+    import auth
+    import planner
+    import rooms
+    import schedule
+    from common import ApiError, db
+    from redis_client import RedisError
+
+
+    def healthz(req):
+        """readiness: Redis까지 연결돼야 트래픽을 받는다."""
+        return {"ok": True, "redis": db.execute("PING")}
+
+
+    def livez(req):
+        """liveness: 프로세스만 살아 있으면 OK (Redis 장애로 api가 재시작되지 않도록 분리)."""
+        return {"ok": True}
+
+
+    # (메서드, 경로, 핸들러, 로그인 필요 여부)
+    ROUTES = [
+        ("GET", r"/api/healthz", healthz, False),
+        ("GET", r"/api/livez", livez, False),
+        ("POST", r"/api/auth/signup", auth.signup, False),
+        ("POST", r"/api/auth/login", auth.login, False),
+        ("POST", r"/api/auth/logout", auth.logout, False),
+        ("GET", r"/api/me", auth.me, True),
+        ("PATCH", r"/api/me", auth.update_me, True),
+        ("GET", r"/api/planner", planner.get_planner, True),
+        ("GET", r"/api/planner/history", planner.history, True),
+        ("POST", r"/api/subjects", planner.create_subject, True),
+        ("PATCH", r"/api/subjects/(\w+)", planner.update_subject, True),
+        ("DELETE", r"/api/subjects/(\w+)", planner.delete_subject, True),
+        ("POST", r"/api/tasks", planner.create_task, True),
+        ("PATCH", r"/api/tasks/(\w+)", planner.update_task, True),
+        ("DELETE", r"/api/tasks/(\w+)", planner.delete_task, True),
+        ("PUT", r"/api/daily", planner.put_daily, True),
+        ("PUT", r"/api/timetable", schedule.put_timetable, True),
+        ("PUT", r"/api/dday", schedule.put_dday, True),
+        ("GET", r"/api/rooms", rooms.list_rooms, True),
+        ("POST", r"/api/rooms", rooms.create_room, True),
+        ("POST", r"/api/rooms/join-code", rooms.join_by_code, True),
+        ("POST", r"/api/rooms/(\w+)/heartbeat", rooms.heartbeat, True),
+        ("POST", r"/api/rooms/(\w+)/leave", rooms.leave, True),
+    ]
+    ROUTES = [(m, re.compile(p), fn, needs_login) for m, p, fn, needs_login in ROUTES]
+    PROBE_PATHS = ("/api/healthz", "/api/livez")
+
+
+    class Request:
+        """핸들러에 넘기는 요청 정보: JSON 본문, 쿼리 문자열, 로그인 사용자, 응답에 붙일 쿠키."""
+
+        def __init__(self, headers, body, query):
+            self.body = body
+            self.query = query
+            self.cookies = []
+            self.uid, self.user = None, None
+            for part in headers.get("Cookie", "").split(";"):
+                name, _, value = part.strip().partition("=")
+                uid = auth.verify_session(value) if name == "sid" else None
+                user = db.hgetall(f"user:{uid}") if uid else None
+                if user:
+                    self.uid, self.user = uid, user
+
+        def login(self, uid):
+            self.cookies.append(auth.session_cookie(auth.sign_session(uid), auth.SESSION_SECONDS))
+
+        def logout(self):
+            self.cookies.append(auth.session_cookie("", 0))
+
+
+    class Handler(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+        server_version = "studypals-api"
+
+        def do_GET(self): self.dispatch("GET")
+        def do_POST(self): self.dispatch("POST")
+        def do_PUT(self): self.dispatch("PUT")
+        def do_PATCH(self): self.dispatch("PATCH")
+        def do_DELETE(self): self.dispatch("DELETE")
+
+        def dispatch(self, method):
+            url = urlparse(self.path)
+            path = url.path
+            req = None
+            try:
+                fn, args, needs_login = self.route(method, path)
+                body = self.read_body()
+                if path not in PROBE_PATHS:   # 프로브는 쿠키·DB 조회 없이 바로 처리
+                    req = Request(self.headers, body, dict(parse_qsl(url.query)))
+                if needs_login and not req.uid:
+                    raise ApiError(401, "로그인이 필요해요")
+                self.reply(200, fn(req, *args), req)
+            except ApiError as e:
+                self.reply(e.status, {"error": e.message}, req)
+            except (OSError, RedisError) as e:
+                self.log_error("db error: %r", e)
+                self.reply(503, {"error": "데이터베이스에 연결할 수 없어요"}, req)
+
+        @staticmethod
+        def route(method, path):
+            for m, pattern, fn, needs_login in ROUTES:
+                match = pattern.fullmatch(path)
+                if m == method and match:
+                    return fn, match.groups(), needs_login
+            raise ApiError(404, "없는 API예요")
+
+        def read_body(self):
+            length = int(self.headers.get("Content-Length") or 0)
+            if length > 64 * 1024:
+                raise ApiError(413, "요청이 너무 커요")
+            raw = self.rfile.read(length) if length else b""
+            if not raw.strip():
+                return {}
+            try:
+                data = json.loads(raw)
+            except ValueError:
+                raise ApiError(400, "JSON 형식이 아니에요")
+            return data if isinstance(data, dict) else {}
+
+        def reply(self, status, data, req=None):
+            payload = json.dumps(data, ensure_ascii=False).encode()
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(payload)))
+            self.send_header("Cache-Control", "no-store")
+            for cookie in (req.cookies if req else []):
+                self.send_header("Set-Cookie", cookie)
+            self.end_headers()
+            self.wfile.write(payload)
+
+        def log_message(self, fmt, *args):
+            if not self.path.startswith(PROBE_PATHS):
+                super().log_message(fmt, *args)
+
+
+    if __name__ == "__main__":
+        # 컨테이너에서 PID 1로 뜨면 SIGTERM 기본 동작이 무시되므로 직접 종료 처리
+        # (없으면 Pod 삭제 시 terminationGracePeriod 30초를 다 채우고 강제 종료된다)
+        signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+        port = int(os.environ.get("PORT", "8080"))
+        server = ThreadingHTTPServer(("0.0.0.0", port), Handler)
+        server.daemon_threads = True
+        print(f"studypals api listening on :{port}", flush=True)
+        server.serve_forever()
+  study.py: |
+    """공부시간 기록. study:{uid}:{YYYYMMDD} 해시에 ms 단위로 누적한다.
+
+    필드: total(그날 총합), s:{subjectId}(과목별), m:{slot}(10분 칸별 — 플래너 시간표에 실제 공부 표시)
+    """
+    from common import db, slot_of, today
+
+    MAX_GAP_SECONDS = 15   # 하트비트 간격이 이보다 길면 그 구간은 공부시간에 넣지 않는다
+    KEEP_DAYS = 400
+
+
+    def study_on(uid, day):
+        raw = db.hgetall(f"study:{uid}:{day}")
+        return {
+            "totalSec": int(raw.get("total", 0)) // 1000,
+            "bySubject": {k[2:]: int(v) // 1000 for k, v in raw.items() if k.startswith("s:")},
+            "bySlot": {k[2:]: int(v) // 1000 for k, v in raw.items() if k.startswith("m:")},
+        }
+
+
+    def study_today(uid):
+        return study_on(uid, today())
+
+
+    def total_today(uid):
+        return int(db.hget(f"study:{uid}:{today()}", "total") or 0) // 1000
+
+
+    def add_study(uid, prev, until):
+        """직전 하트비트 상태가 STUDYING이었던 구간(prev.ts ~ until)만 더한다."""
+        gap = until - prev["ts"]
+        if prev["status"] != "STUDYING" or not 0 < gap <= MAX_GAP_SECONDS:
+            return
+        key, ms = f"study:{uid}:{today()}", int(gap * 1000)
+        db.hincrby(key, "total", ms)
+        db.hincrby(key, f"m:{slot_of(prev['ts'])}", ms)
+        if prev.get("subjectId"):
+            db.hincrby(key, f"s:{prev['subjectId']}", ms)
+        db.execute("EXPIRE", key, KEEP_DAYS * 86400)

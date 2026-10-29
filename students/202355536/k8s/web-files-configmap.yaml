@@ -1,0 +1,3350 @@
+# 자동 생성 파일 — src/web/ 를 수정한 뒤 scripts/gen_configmaps.py 로 다시 생성
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: studyroom-web-files
+  labels:
+    app: studyroom
+    component: web
+data:
+  api.js: |
+    // 서버 API 호출 래퍼: JSON 송수신, 실패 응답은 서버 메시지를 담은 Error로 변환
+
+    async function request(method, path, body) {
+      const res = await fetch(`/api${path}`, {
+        method,
+        headers: body ? { 'Content-Type': 'application/json' } : {},
+        body: body ? JSON.stringify(body) : undefined,
+        keepalive: method !== 'GET',
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        const err = new Error(data.error || `요청에 실패했어요 (${res.status})`);
+        err.status = res.status;
+        throw err;
+      }
+      return data;
+    }
+
+    export const get = (path) => request('GET', path);
+    export const post = (path, body = {}) => request('POST', path, body);
+    export const put = (path, body) => request('PUT', path, body);
+    export const patch = (path, body) => request('PATCH', path, body);
+    export const del = (path) => request('DELETE', path);
+  app.js: |
+    // 앱 진입점: 로그인 확인 후 해시 라우팅 (#/login, #/rooms, #/planner, #/character, #/room/{id})
+    import { get, post } from './api.js';
+    import { mountAuth } from './auth-view.js';
+    import { mountCharacterPage } from './character-page.js';
+    import { mountPlannerPage } from './planner-page.js';
+    import { mountRooms } from './rooms-view.js';
+
+    // 공부방(Three.js·블룸 애드온 등 CDN 모듈)은 들어갈 때만 불러온다.
+    // 정적으로 import하면 그 모듈을 다 받을 때까지 로그인 화면조차 뜨지 않는다.
+    const loadRoom = () => import('./room-view.js');
+
+    const root = document.getElementById('app');
+    let unmount = null;
+    let renderId = 0;     // 공부방 모듈을 받는 동안 다른 화면으로 이동했는지 확인용
+
+    const ctx = {
+      user: null,
+      go: (hash) => { location.hash = hash; },
+      onLogin(user) {
+        ctx.user = user;
+        ctx.go('#/rooms');
+      },
+      async logout() {
+        await post('/auth/logout').catch(() => {});
+        ctx.user = null;
+        ctx.go('#/login');
+      },
+    };
+
+    const PAGES = { rooms: mountRooms, planner: mountPlannerPage, character: mountCharacterPage };
+
+    async function render() {
+      const current = ++renderId;
+      unmount?.();
+      unmount = null;
+      root.replaceChildren();
+
+      const [, view, id] = location.hash.split('/');
+      if (!ctx.user && view !== 'login') return ctx.go('#/login');
+      if (ctx.user && view === 'login') return ctx.go('#/rooms');
+
+      if (view === 'login') unmount = mountAuth(root, ctx);
+      else if (PAGES[view]) {
+        unmount = PAGES[view](root, ctx);
+        loadRoom();   // 목록·플래너를 보는 동안 공부방 모듈을 미리 받아 둔다
+      } else if (view === 'room' && id) {
+        root.textContent = '공부방을 불러오는 중…';
+        const { mountRoom } = await loadRoom();
+        if (current !== renderId) return;
+        root.replaceChildren();
+        unmount = mountRoom(root, ctx, id);
+      } else ctx.go('#/rooms');
+    }
+
+    try {
+      ctx.user = (await get('/me')).user;
+    } catch {
+      ctx.user = null;
+    }
+    addEventListener('hashchange', render);
+    render();
+  auth-view.js: |
+    // 로그인 / 간단 가입 화면 (캐릭터는 가입 시 랜덤, 로그인 후 상단에서 바꾼다)
+    import { post } from './api.js';
+    import { h, toast } from './ui.js';
+
+    export function mountAuth(root, ctx) {
+      let mode = 'login';
+      const card = h('section', { class: 'card auth-card' });
+
+      root.append(h('main', { class: 'auth-page' },
+        h('a', { class: 'logo auth-brand', href: '#/login', 'aria-label': 'StudyPals 홈' },
+          h('span', { class: 'brand-mark', 'aria-hidden': 'true' }, 's'), 'StudyPals'),
+        h('div', { class: 'auth-hero' },
+          h('span', { class: 'eyebrow' }, '나의 온라인 도서관'),
+          h('h1', {}, '오늘 공부도', h('br'), '여기서 시작해요.'),
+          h('p', { class: 'auth-description' }, '조용한 도서관에 자리를 잡고, 오늘 할 일을 펼쳐보세요.',
+            h('br'), '같이 공부할 친구들이 기다리고 있어요.'),
+          h('ol', { class: 'hero-points' },
+            h('li', {}, h('span', {}, '01'), h('div', {}, h('strong', {}, '함께 앉는 공부방'), h('p', {}, '내 캐릭터로 입장하는 작은 3D 도서관'))),
+            h('li', {}, h('span', {}, '02'), h('div', {}, h('strong', {}, '차곡차곡 쌓이는 시간'), h('p', {}, '공부한 시간과 하루의 기록을 한곳에'))),
+            h('li', {}, h('span', {}, '03'), h('div', {}, h('strong', {}, '나만의 공부 계획'), h('p', {}, '과목별 할 일부터 10분 단위 시간표까지'))))),
+        card));
+
+      const field = (label, input) => h('label', { class: 'field' }, h('span', {}, label), input);
+
+      function draw() {
+        const signup = mode === 'signup';
+        const tab = (m, label) => h('button', {
+          type: 'button', class: `tab${mode === m ? ' on' : ''}`, 'aria-pressed': String(mode === m),
+          onClick: () => { mode = m; draw(); },
+        }, label);
+        card.replaceChildren(
+          h('div', { class: 'auth-card-heading' }, h('h2', {}, signup ? '첫 공부를 시작해볼까요?' : '다시 만나서 반가워요.'),
+            h('p', {}, signup ? '간단한 가입으로 내 자리를 만들어보세요.' : '로그인하고 오늘의 공부를 이어가세요.')),
+          h('div', { class: 'tabs' }, tab('login', '로그인'), tab('signup', '가입하기')),
+          h('form', { class: 'stack', onSubmit: submit },
+            field('아이디', h('input', { name: 'username', required: true, autocomplete: 'username',
+              placeholder: '영문 소문자·숫자 3~20자', pattern: '[a-z0-9]{3,20}' })),
+            field('비밀번호', h('input', { name: 'password', type: 'password', required: true, minLength: 6, maxLength: 72,
+              placeholder: '6자 이상 입력',
+              autocomplete: signup ? 'new-password' : 'current-password' })),
+            signup && field('닉네임', h('input', { name: 'name', required: true, maxLength: 12, placeholder: '방에서 보일 이름' })),
+            signup && h('small', {}, '캐릭터는 가입 후 캐릭터 메뉴에서 바꿀 수 있어요.'),
+            h('button', { class: 'btn primary', type: 'submit' }, signup ? '가입하고 시작하기' : '로그인')));
+      }
+
+      async function submit(e) {
+        e.preventDefault();
+        const button = e.target.querySelector('[type="submit"]');
+        button.disabled = true;
+        try {
+          const path = mode === 'signup' ? '/auth/signup' : '/auth/login';
+          const { user } = await post(path, Object.fromEntries(new FormData(e.target)));
+          ctx.onLogin(user);
+        } catch (err) {
+          toast(err.message);
+        } finally {
+          button.disabled = false;
+        }
+      }
+
+      draw();
+    }
+  base.css: |
+    /* 공통: 색 토큰, 기본 요소, 버튼·입력·카드 같은 컴포넌트 */
+    :root {
+      --bg: #fbf4e6;
+      --paper: #fffdf7;
+      --ink: #4a3f35;
+      --muted: #8c7d6c;
+      --line: #eadcc4;
+      --leaf: #7fb069;
+      --leaf-dark: #5a8f4e;
+      --peach: #f4a261;
+      --sky: #cfe8f3;
+      --radius: 18px;
+      --shadow: 0 6px 0 #e6d6bb, 0 10px 24px rgba(120, 95, 60, 0.12);
+      --font-title: 'Jua', system-ui, sans-serif;
+      --font-body: 'Gowun Dodum', system-ui, sans-serif;
+      --font-hand: 'Gaegu', 'Gowun Dodum', system-ui, sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; }
+    body {
+      background: radial-gradient(circle at 20% 0%, #fff7e8 0, var(--bg) 55%) fixed;
+      color: var(--ink);
+      font: 15px/1.5 var(--font-body);
+    }
+    h1, h2, h3 { font-family: var(--font-title); font-weight: 400; margin: 0; }
+    h2 { font-size: 1.35rem; }
+    h3 { font-size: 1.05rem; }
+    small { color: var(--muted); }
+    button, input, select { font: inherit; color: inherit; }
+
+    input, select {
+      width: 100%;
+      padding: 10px 12px;
+      border: 2px solid var(--line);
+      border-radius: 12px;
+      background: #fff;
+      outline: none;
+    }
+    input:focus, select:focus { border-color: var(--leaf); }
+    input[type='checkbox'] { width: 18px; height: 18px; accent-color: var(--leaf-dark); flex: none; }
+    input[type='range'] { width: 90px; padding: 0; border: 0; accent-color: var(--leaf-dark); }
+
+    .btn {
+      padding: 10px 18px;
+      border: 0;
+      border-radius: 999px;
+      background: #f1e6d2;
+      font-family: var(--font-title);
+      cursor: pointer;
+      box-shadow: 0 3px 0 #dccaa9;
+      transition: transform 0.1s;
+      white-space: nowrap;
+    }
+    .btn:active { transform: translateY(2px); box-shadow: 0 1px 0 #dccaa9; }
+    .btn:disabled { opacity: 0.45; cursor: not-allowed; }
+    .btn.primary { background: var(--leaf); color: #fff; box-shadow: 0 3px 0 var(--leaf-dark); }
+    .btn.ghost { background: transparent; box-shadow: none; border: 2px solid var(--line); }
+    .btn.small { padding: 6px 12px; font-size: 0.9rem; }
+    .icon { border: 0; background: none; cursor: pointer; color: var(--muted); padding: 2px 6px; border-radius: 8px; }
+    .icon:hover { background: #f4ead8; }
+
+    .card {
+      background: var(--paper);
+      border: 2px solid var(--line);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      padding: 18px;
+    }
+    .stack { display: flex; flex-direction: column; gap: 12px; }
+    .row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .row.between { justify-content: space-between; }
+    .empty { color: var(--muted); text-align: center; margin: 8px 0; }
+    .label { color: var(--muted); min-width: 36px; }
+
+    .chip, .badge {
+      display: inline-flex; align-items: center; gap: 4px;
+      padding: 4px 12px;
+      border-radius: 999px;
+      background: #f4ead8;
+      font-family: var(--font-title);
+      font-size: 0.9rem;
+      border: 0;
+    }
+    .badge.private { background: #ffe1d1; cursor: pointer; }
+    .chip-btn {
+      border: 2px solid var(--line); background: #fff; border-radius: 999px;
+      padding: 2px 10px; font-size: 0.8rem; cursor: pointer; white-space: nowrap;
+    }
+    .chip-btn.on { background: #e7f3df; border-color: var(--leaf); color: var(--leaf-dark); }
+
+    .seg {
+      border: 2px solid var(--line); background: #fff; border-radius: 999px;
+      padding: 6px 14px; cursor: pointer; font-family: var(--font-title);
+    }
+    .seg.on { background: var(--leaf); border-color: var(--leaf); color: #fff; }
+
+    .swatches { display: flex; gap: 6px; flex-wrap: wrap; }
+    .swatch {
+      width: 26px; height: 26px; border-radius: 50%;
+      background: var(--c); border: 3px solid #fff; box-shadow: 0 0 0 2px var(--line); cursor: pointer;
+    }
+    .swatch.on { box-shadow: 0 0 0 3px var(--ink); }
+    .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: var(--c); flex: none; }
+
+    .logo { font-family: var(--font-title); font-size: 3rem; color: var(--leaf-dark); letter-spacing: 2px; }
+    .logo.small { font-size: 1.6rem; }
+
+    #toast {
+      position: fixed; left: 50%; bottom: 28px; transform: translate(-50%, 20px);
+      background: var(--ink); color: #fff; padding: 10px 18px; border-radius: 999px;
+      opacity: 0; pointer-events: none; transition: 0.25s; z-index: 100; max-width: calc(100% - 32px);
+    }
+    #toast.show { opacity: 1; transform: translate(-50%, 0); }
+  character-page.js: |
+    // 캐릭터 페이지: 고르면 3D 미리보기에 보여 주고, 저장해야 실제로 바뀐다
+    import { patch } from './api.js';
+    import { mountShell } from './shell.js';
+    import { CHARACTERS, characterOf, fill, h, toast } from './ui.js';
+
+    const CHARACTER_IDS = Object.keys(CHARACTERS);
+
+    export function mountCharacterPage(root, ctx) {
+      const shell = mountShell(root, ctx, 'character');
+      const stage = h('div', { class: 'preview-stage' }, h('p', { class: 'empty' }, '미리보기를 불러오는 중…'));
+      const info = h('div', { class: 'preview-info' });
+      const grid = h('div', { class: 'char-grid big' });
+      let picked = ctx.user.character;
+      let preview = null;
+      let closed = false;
+
+      shell.main.append(
+        h('div', { class: 'page-head' },
+          h('div', {}, h('span', { class: 'eyebrow' }, '공부방 속 나의 모습'), h('h1', {}, '캐릭터'),
+            h('p', {}, '함께 공부할 친구를 고르고 저장해주세요.'))),
+        h('div', { class: 'character-layout' },
+          h('section', { class: 'card preview-card' }, stage, info),
+          h('section', { class: 'card stack' }, h('h2', {}, '내 캐릭터 고르기'), grid)));
+
+      function draw() {
+        const current = ctx.user.character;
+        const look = characterOf(picked);
+        fill(info,
+          h('h2', {}, `${look.emoji} ${look.label}`),
+          h('small', {}, picked === current ? '지금 쓰고 있는 캐릭터예요' : '미리보기 중이에요 · 저장하면 바뀌어요'),
+          h('div', { class: 'row' },
+            h('button', { class: 'btn ghost', onClick: random }, '랜덤 선택'),
+            h('button', { class: 'btn primary', disabled: picked === current, onClick: save }, '이 캐릭터로 저장')));
+        grid.replaceChildren(...CHARACTER_IDS.map((id) => {
+          const c = CHARACTERS[id];
+          return h('button', { class: `char${id === picked ? ' on' : ''}`, 'aria-pressed': String(id === picked), onClick: () => pick(id) },
+            h('span', { class: 'avatar big', style: `--c:${c.color}` }, c.emoji),
+            h('small', {}, c.label),
+            id === current && h('span', { class: 'badge' }, '사용 중'));
+        }));
+      }
+
+      function pick(id) {
+        picked = id;
+        preview?.show(id);
+        draw();
+      }
+
+      function random() {
+        const others = CHARACTER_IDS.filter((id) => id !== picked);
+        pick(others[Math.floor(Math.random() * others.length)]);
+      }
+
+      async function save() {
+        try {
+          ctx.user = (await patch('/me', { character: picked })).user;
+          shell.refreshProfile();
+          toast(`${characterOf(picked).label}(으)로 저장했어요`);
+          draw();
+        } catch (err) {
+          toast(err.message);
+        }
+      }
+
+      // 3D 미리보기(Three.js)는 공부방처럼 필요할 때만 불러온다
+      import('./character-preview.js').then(({ createPreview }) => {
+        if (closed) return;
+        stage.replaceChildren();
+        preview = createPreview(stage);
+        preview.show(picked);
+      }).catch(() => fill(stage, h('p', { class: 'empty' }, '3D 미리보기를 불러오지 못했어요')));
+
+      draw();
+      return () => {
+        closed = true;
+        preview?.destroy();
+        shell.destroy();
+      };
+    }
+  character-preview.js: |
+    // 캐릭터 페이지의 3D 미리보기: 방석 위에 앉아 손을 흔들며 천천히 좌우로 돈다
+    import * as THREE from 'three';
+    import { createCharacter } from './characters.js';
+    import { cyl } from './mesh.js';
+
+    export function createPreview(container) {
+      const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+      renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+      renderer.toneMapping = THREE.ACESFilmicToneMapping;
+      renderer.shadowMap.enabled = true;
+      container.append(renderer.domElement);
+
+      const scene = new THREE.Scene();
+      const camera = new THREE.PerspectiveCamera(30, 1, 0.1, 50);
+      camera.position.set(0, 2.2, 6.2);
+      camera.lookAt(0, 1.05, 0);
+
+      const sun = new THREE.DirectionalLight('#fff3e0', 2.2);
+      sun.position.set(3, 6, 4);
+      sun.castShadow = true;
+      scene.add(new THREE.HemisphereLight('#ffffff', '#c9b38f', 1.6), sun);
+
+      const cushion = cyl(0.62, 0.66, 0.16, '#7fb069', [0, 0.42, 0], 32);   // 앉을 방석
+      const floor = cyl(1.5, 1.5, 0.08, '#f1e6d2', [0, 0.04, 0], 48);
+      scene.add(floor, cushion);
+
+      let character = null;
+      const clock = new THREE.Clock();
+
+      function resize() {
+        const { clientWidth: w, clientHeight: h } = container;
+        camera.aspect = w / h || 1;
+        camera.updateProjectionMatrix();
+        renderer.setSize(w, h);
+      }
+      const observer = new ResizeObserver(resize);
+      observer.observe(container);
+
+      renderer.setAnimationLoop(() => {
+        const dt = clock.getDelta();
+        const t = clock.elapsedTime;
+        if (character) {
+          character.root.rotation.y = Math.sin(t * 0.5) * 0.7;
+          character.tick(t, dt);
+        }
+        renderer.render(scene, camera);
+      });
+
+      return {
+        /** 캐릭터 id를 바꿔 보여 준다 */
+        show(characterId) {
+          if (character) scene.remove(character.root);
+          character = createCharacter({ id: 'preview', character: characterId }, { withProps: false });
+          character.setPose('HELLO');
+          scene.add(character.root);
+        },
+        destroy() {
+          renderer.setAnimationLoop(null);
+          observer.disconnect();
+          scene.traverse((o) => o.geometry?.dispose());
+          renderer.dispose();
+          renderer.domElement.remove();
+        },
+      };
+    }
+  character-props.js: |
+    // 캐릭터 자리의 개인 소품: 펼친 책·커피·책 더미(오늘 남은 할 일), 손에 드는 휴대폰
+    import * as THREE from 'three';
+    import { DESK, book, coffeeMug, openBook } from './furniture.js';
+    import { box, glow } from './mesh.js';
+
+    const BOOK_THICKNESS = 0.1;
+
+    export function deskProps() {
+      const reading = openBook();
+      reading.object.position.set(-0.62, DESK.top + 0.01, DESK.near + 0.3);
+      reading.object.rotation.y = 0.15;
+
+      const mug = coffeeMug();
+      mug.object.position.set(0.55, DESK.top, DESK.near + 0.28);
+
+      const stack = new THREE.Group();
+      stack.position.set(0.72, DESK.top + BOOK_THICKNESS / 2, DESK.far - 0.35);
+      return { reading, mug, stack };
+    }
+
+    export function phone() {
+      const g = new THREE.Group();
+      g.add(box(0.15, 0.26, 0.03, '#2b2d42'), box(0.12, 0.21, 0.005, glow('#9ad1ff', 1.5), [0, 0, 0.018]));
+      g.position.set(0, -0.48, 0.08);
+      g.rotation.x = -0.3;
+      return g;
+    }
+
+    /** 남은 할 일의 과목 색대로 책을 살짝 엇갈리게 쌓는다 */
+    export function stackBooks(stack, colors) {
+      stack.clear();
+      colors.forEach((c, i) => {
+        const b = book(c, 0.56, BOOK_THICKNESS, 0.42);
+        b.position.y = i * (BOOK_THICKNESS + 0.004);
+        b.rotation.y = i % 2 ? 0.12 : -0.1;
+        stack.add(b);
+      });
+    }
+  characters.js: |
+    // 치비 동물 캐릭터(곰·토끼·고양이·강아지)와 상태별 포즈·소품
+    import * as THREE from 'three';
+    import { deskProps, phone, stackBooks } from './character-props.js';
+    import { capsule, plush, sphere } from './mesh.js';
+    import { STATUS, characterOf, fill, h } from './ui.js';
+
+    const SHIRTS = ['#7fa7c9', '#d98a7a', '#8fb380', '#a993c4', '#d9b25f', '#6fb0b8'];
+    const INK = '#2b211c';
+    const BLUSH = '#ff9fa0';
+    const PINK_NOSE = '#f29aa5';
+    const HEAD_SCALE = 0.85;   // 몸에 비해 머리 크기 (귀·얼굴 포함)
+    const DOG_EAR = '#94592b';
+
+    // 캐릭터별 얼굴: 주둥이 색, 코 색, snout(주둥이 길이 배율), iris(눈동자 뒤 홍채), tongue(혀)
+    const FACE = {
+      bear: { muzzle: '#fff1de', nose: INK },
+      rabbit: { muzzle: '#fff1de', nose: PINK_NOSE },
+      'cat-white': { muzzle: '#fff1de', nose: PINK_NOSE },
+      'cat-black': { muzzle: '#3d393b', nose: PINK_NOSE, iris: '#e8c547' },   // 검은 털에 눈이 묻히지 않게
+      dog: { muzzle: '#e3b67f', nose: INK, snout: 1.3, tongue: true },
+    };
+
+    function ears(animal, fur) {
+      const g = new THREE.Group();
+      for (const side of [-1, 1]) {
+        if (animal === 'bear') {
+          g.add(sphere(0.17, fur, [side * 0.36, 0.84, 0]), sphere(0.09, plush(BLUSH), [side * 0.36, 0.84, 0.09], [1, 1, 0.5]));
+        } else if (animal === 'cat') {
+          for (const [r, len, z, m] of [[0.23, 0.44, 0, fur], [0.13, 0.28, 0.07, plush(BLUSH)]]) {
+            const ear = new THREE.Mesh(new THREE.ConeGeometry(r, len, 4), m);
+            ear.position.set(side * 0.31, 0.92 - (0.44 - len) / 2, z);
+            ear.rotation.z = -side * 0.35;
+            g.add(ear);
+          }
+        } else if (animal === 'dog') {
+          // 리트리버처럼 머리 옆으로 축 늘어진 귀
+          const ear = sphere(0.21, plush(DOG_EAR), [side * 0.5, 0.4, -0.02], [0.5, 1.2, 0.85]);
+          ear.rotation.z = side * 0.25;
+          g.add(ear);
+        } else {
+          for (const [r, len, z, m] of [[0.1, 0.5, -0.02, fur], [0.05, 0.38, 0.07, plush(BLUSH)]]) {
+            const ear = capsule(r, len, m, [side * 0.17, 1.1, z]);
+            ear.rotation.z = -side * 0.14;
+            g.add(ear);
+          }
+        }
+      }
+      return g;
+    }
+
+    function head(characterId, animal, fur) {
+      const face = FACE[characterId];
+      const snout = face.snout ?? 1;
+      const g = new THREE.Group();
+      g.add(
+        sphere(0.52, fur, [0, 0.42, 0], [1.06, 0.95, 1]),
+        sphere(0.06, INK, [-0.17, 0.46, 0.46]), sphere(0.06, INK, [0.17, 0.46, 0.46]),
+        sphere(0.02, '#ffffff', [-0.15, 0.49, 0.51]), sphere(0.02, '#ffffff', [0.19, 0.49, 0.51]),
+        sphere(0.08, plush(BLUSH), [-0.31, 0.33, 0.4], [1, 0.6, 0.4]), sphere(0.08, plush(BLUSH), [0.31, 0.33, 0.4], [1, 0.6, 0.4]),
+        sphere(0.17, plush(face.muzzle), [0, 0.3, 0.43 + (snout - 1) * 0.15], [1.2, 0.8, 0.7 * snout]),
+        sphere(0.05 * snout, face.nose, [0, 0.36, 0.56 + (snout - 1) * 0.3]),
+        ears(animal, fur),
+      );
+      if (face.iris) g.add(sphere(0.085, face.iris, [-0.17, 0.46, 0.43]), sphere(0.085, face.iris, [0.17, 0.46, 0.43]));
+      if (face.tongue) g.add(sphere(0.05, '#f08a96', [0, 0.17, 0.58], [1, 0.5, 0.6]));
+      return g;
+    }
+
+    /** 캐릭터를 새로 만들어야 하는지 판단하는 키 (사람과 캐릭터가 같으면 재사용) */
+    export const characterKey = (m) => `${m.id}:${m.character}`;
+
+    /** 어깨를 축으로 회전하는 팔. rotation.x < 0 이면 앞으로 든다. */
+    function arm(side, shirt, fur) {
+      const pivot = new THREE.Group();
+      pivot.position.set(side * 0.36, 0.65, 0);
+      pivot.add(capsule(0.1, 0.3, shirt, [0, -0.2, 0]), sphere(0.1, fur, [0, -0.42, 0]));
+      return pivot;
+    }
+
+    // 상태별 목표 각도 (t: 경과 시간[s])
+    // 팔 rotation.z: +x쪽 팔(right)은 음수일수록, -x쪽 팔(left)은 양수일수록 몸 안쪽으로 모인다
+    const POSES = {
+      STUDYING: (t) => ({ lean: 0.1, headX: 0.22 + Math.sin(t * 1.3) * 0.03, headY: Math.sin(t * 0.4) * 0.06,
+        rightX: -1.15 + Math.sin(t * 13) * 0.05, rightZ: -0.25, leftX: -1.15 + Math.cos(t * 11) * 0.05, leftZ: 0.25 }),
+      AWAY: (t) => ({ lean: 0, headX: 0.32, headY: Math.sin(t * 0.7) * 0.1,
+        rightX: -1.75, rightZ: -0.35, leftX: -0.5, leftZ: 0 }),
+      BREAK: (t) => ({ lean: -0.08, headX: -0.18, headY: 0,
+        rightX: 0, rightZ: 2.4 + Math.sin(t * 1.4) * 0.3, leftX: 0, leftZ: -2.4 - Math.sin(t * 1.4) * 0.3 }),
+      IDLE: () => ({ lean: 0.35, headX: 0.65, headY: 0.25,
+        rightX: -1.35, rightZ: -0.5, leftX: -1.35, leftZ: 0.5 }),
+      // 캐릭터 페이지 미리보기: 한 손을 들어 흔든다
+      HELLO: (t) => ({ lean: 0, headX: -0.05, headY: Math.sin(t * 1.2) * 0.15,
+        rightX: 0, rightZ: 2.5 + Math.sin(t * 7) * 0.25, leftX: -0.3, leftZ: 0.1 }),
+    };
+
+    /** withProps: 책상 위 개인 소품(펼친 책·커피·책 더미)까지 그릴지 — 캐릭터 페이지 미리보기는 false */
+    export function createCharacter(member, { withProps = true } = {}) {
+      const shirt = plush(SHIRTS[[...member.id].reduce((a, c) => a + c.charCodeAt(0), 0) % SHIRTS.length]);
+      const id = member.character in FACE ? member.character : 'bear';   // 모르는 캐릭터면 곰
+      const look = characterOf(id);
+      const fur = plush(look.color);
+      const root = new THREE.Group();
+      const upper = new THREE.Group();          // 허리를 축으로 기울어지는 상체
+      upper.position.y = 0.55;
+      const headPivot = new THREE.Group();
+      headPivot.position.y = 0.8;
+      const headModel = head(id, look.animal, fur);
+      headModel.scale.setScalar(HEAD_SCALE);
+      headPivot.add(headModel);
+      const right = arm(1, shirt, fur);
+      const left = arm(-1, shirt, fur);
+      upper.add(capsule(0.3, 0.25, shirt, [0, 0.42, 0]), headPivot, right, left);
+
+      const legs = [-1, 1].map((side) => {
+        const leg = capsule(0.11, 0.3, plush('#5c6470'), [side * 0.14, 0.6, 0.22]);
+        leg.rotation.x = Math.PI / 2;
+        return leg;
+      });
+      const props = deskProps();
+      const handPhone = phone();
+      handPhone.visible = false;   // 자리 비움(AWAY) 상태에서만 보인다
+      right.add(handPhone);
+      const labelAnchor = new THREE.Object3D();
+      labelAnchor.position.y = 2.4;
+      root.add(upper, ...legs, labelAnchor);
+      if (withProps) root.add(props.reading.object, props.mug.object, props.stack);
+
+      // 이름표는 HTML로 그린다 (블룸 효과에 번지지 않고 글자가 선명하다)
+      const label = h('div', { class: 'name-tag' });
+      let status = null;
+      let books = '';
+      let labelKey = '';
+      const pose = { ...POSES.IDLE(0) };
+
+      /** 이름표: 1줄 상태+이름, 2줄 지금 시각에 계획된 과목·할 일 (플래너 시간표) */
+      function drawLabel(m) {
+        const plan = m.plan && `${m.plan.name}${m.plan.task ? ` · ${m.plan.task}` : ''}`;
+        const key = `${status}|${m.name}|${plan}`;
+        if (key === labelKey) return;
+        labelKey = key;
+        fill(label,
+          h('span', {}, `${STATUS[status].emoji} ${m.name}`),
+          plan && h('small', { class: 'plan', style: `--c:${m.plan.color}` }, h('i', { class: 'dot' }), plan));
+      }
+
+      function setBooks(colors) {
+        const key = colors.join();
+        if (key === books) return;
+        books = key;
+        stackBooks(props.stack, colors);
+      }
+
+      return {
+        root,
+        label,
+        labelAnchor,
+        key: characterKey(member),
+        get status() { return status; },
+        /** 이름표·소품 없이 포즈만 정한다 (캐릭터 페이지 미리보기) */
+        setPose(name) { status = name; },
+        update(m, isMe) {
+          status = m.status;
+          props.reading.object.visible = status === 'STUDYING';
+          props.reading.setColor(m.subjectColor || '#e76f51');
+          handPhone.visible = status === 'AWAY';
+          setBooks(m.books || []);
+          label.className = `name-tag ${status}${isMe ? ' me' : ''}`;
+          drawLabel(m);
+        },
+        tick(t, dt) {
+          const target = POSES[status || 'IDLE'](t);
+          const k = Math.min(1, dt * 6);
+          for (const key in target) pose[key] += (target[key] - pose[key]) * k;
+          props.mug.tick(t);
+          upper.rotation.x = pose.lean;
+          upper.scale.y = 1 + Math.sin(t * 2) * 0.012;
+          headPivot.rotation.set(pose.headX, pose.headY, 0);
+          right.rotation.set(pose.rightX, 0, pose.rightZ);
+          left.rotation.set(pose.leftX, 0, pose.leftZ);
+        },
+        dispose() {
+          label.remove();
+        },
+      };
+    }
+  daylight.js: |
+    // 실제 시각에 따른 하늘·빛 상태: 새벽 → 해돋이 → 낮 → 노을 → 밤
+    // 키프레임 사이는 선형 보간해서 시간이 흐르면 자연스럽게 바뀐다.
+    // 미리보기: 주소에 ?time=18:30 을 붙이면 그 시각으로 고정된다.
+    import * as THREE from 'three';
+
+    // [시각, 하늘 위, 지평선, 햇빛 색, 햇빛 세기, 주변광 세기, 실내 조명 비율, 별]
+    // 실내 조명 비율이 0인 아침·낮(8시~16시)에는 책상 스탠드가 꺼진다
+    const KEYS = [
+      [0, '#0a0f24', '#1c2348', '#8fa6ff', 0.25, 0.45, 1.0, 1.0],
+      [4.5, '#111735', '#3a2f5c', '#8fa6ff', 0.25, 0.5, 1.0, 0.8],
+      [5.5, '#2b3a6b', '#d68fa0', '#ffb08a', 0.6, 0.75, 0.8, 0.25],
+      [6.5, '#5b8bc9', '#ffb27a', '#ffb070', 1.6, 1.0, 0.3, 0],
+      [8, '#4f9be6', '#cfe6f7', '#fff3e0', 2.8, 1.4, 0, 0],
+      [16, '#4f9be6', '#d8ecf8', '#fff0d8', 2.6, 1.4, 0, 0],
+      [17.5, '#6a7fc0', '#ffb36b', '#ffa860', 1.8, 1.1, 0.45, 0],
+      [18.6, '#363b78', '#e2704a', '#ff7a40', 0.8, 0.8, 0.85, 0.1],
+      [19.6, '#121836', '#2c2c5c', '#8fa6ff', 0.25, 0.5, 1.0, 0.8],
+      [24, '#0a0f24', '#1c2348', '#8fa6ff', 0.25, 0.45, 1.0, 1.0],
+    ];
+
+    const NAMES = [[4.5, '🌌 밤'], [6, '🌄 새벽'], [7.5, '🌅 해돋이'], [17, '☀️ 낮'], [19, '🌇 노을'], [24, '🌙 밤']];
+
+    export function currentHours() {
+      const fixed = new URLSearchParams(location.search).get('time');
+      const match = fixed?.match(/^(\d{1,2}):(\d{2})$/);
+      if (match) return Number(match[1]) + Number(match[2]) / 60;
+      const now = new Date();
+      return now.getHours() + now.getMinutes() / 60;
+    }
+
+    const lerp = (a, b, t) => a + (b - a) * t;
+    const mix = (a, b, t) => new THREE.Color(a).lerp(new THREE.Color(b), t);
+
+    /** 시각(0~24) → 하늘·빛 상태 */
+    export function daylightAt(hours) {
+      const i = KEYS.findIndex((k, idx) => hours >= k[0] && hours < KEYS[idx + 1][0]);
+      const [h0, top0, hor0, sun0, si0, amb0, lamp0, star0] = KEYS[i];
+      const [h1, top1, hor1, sun1, si1, amb1, lamp1, star1] = KEYS[i + 1];
+      const t = (hours - h0) / (h1 - h0);
+
+      // 해는 5:30~19:00 동안 창 왼쪽에서 오른쪽으로 호를 그리며 지나간다. 나머지 시간엔 달.
+      const isDay = hours >= 5.5 && hours < 19;
+      const progress = isDay ? (hours - 5.5) / 13.5 : ((hours + 5) % 24) / 10.5;
+      return {
+        hours,
+        name: NAMES.find(([end]) => hours < end)[1],
+        skyTop: mix(top0, top1, t),
+        horizon: mix(hor0, hor1, t),
+        sunColor: mix(sun0, sun1, t),
+        sunIntensity: lerp(si0, si1, t),
+        ambient: lerp(amb0, amb1, t),
+        lamp: lerp(lamp0, lamp1, t),
+        stars: lerp(star0, star1, t),
+        body: isDay ? 'sun' : 'moon',
+        progress,                                   // 0(왼쪽) → 1(오른쪽)
+        elevation: Math.sin(progress * Math.PI),    // 0(지평선) → 1(가장 높음)
+      };
+    }
+  furniture.js: |
+    // 책상과 책상 위 소품(스탠드·노트북·책·커피). 좌표는 각 물건의 바닥 중심 기준.
+    import * as THREE from 'three';
+    import { box, cyl, group, mat } from './mesh.js';
+    import { codeScreen } from './textures.js';
+
+    export const OAK = '#d6b48a';
+    export const WHITE = '#f2f0eb';
+    export const METAL = mat('#3a3a40', { metalness: 0.5, roughness: 0.5 });
+
+    /**
+     * 책상 치수. 캐릭터는 원점에 앉아 +z를 보고, 책상은 z = near ~ near + depth 에 놓인다.
+     * top: 책상 윗면 높이 (소품을 올릴 기준)
+     */
+    export const DESK = { width: 2.4, depth: 1.25, height: 0.85, near: 0.3 };
+    DESK.top = DESK.height + 0.035;
+    DESK.far = DESK.near + DESK.depth;     // 좌석 원점 → 책상 앞 가장자리
+
+    /** 흰 상판 + 원목 몸체 책상(오른쪽 서랍장, 서랍은 앉는 쪽) + 의자 */
+    export function deskSet() {
+      const { width: w, depth: d, height: h, near } = DESK;
+      const midZ = near + d / 2;
+      const cabinetX = w / 2 - 0.33;
+      const drawers = [0.22, 0.46, 0.7].map((y) => box(0.48, 0.02, 0.01, '#b8936a', [cabinetX, y, near + 0.045]));
+      const desk = group(
+        box(w, 0.07, d, mat(WHITE, { roughness: 0.65 }), [0, h, midZ]),   // 무광에 가깝게 (스탠드 빛 반사로 하얗게 타지 않게)
+        box(w - 0.1, 0.62, 0.04, OAK, [0, h - 0.36, DESK.far - 0.05]),                 // 앞판
+        box(0.58, h - 0.06, d - 0.1, OAK, [cabinetX, (h - 0.06) / 2, midZ]),            // 서랍장
+        box(0.05, h - 0.06, d - 0.1, OAK, [-w / 2 + 0.05, (h - 0.06) / 2, midZ]),       // 왼쪽 다리판
+        ...drawers,
+      );
+      const legs = [[-0.24, -0.24], [0.24, -0.24], [-0.24, 0.24], [0.24, 0.24]]
+        .map(([x, z]) => cyl(0.02, 0.02, 0.48, METAL, [x, 0.24, z], 6));
+      const chair = group(
+        box(0.56, 0.05, 0.54, '#c79a68', [0, 0.5, 0]),
+        box(0.56, 0.36, 0.05, '#c79a68', [0, 0.86, -0.28]),
+        cyl(0.02, 0.02, 0.4, METAL, [-0.24, 0.68, -0.27], 6),
+        cyl(0.02, 0.02, 0.4, METAL, [0.24, 0.68, -0.27], 6),
+        ...legs,
+      );
+      return group(desk, chair);
+    }
+
+    /** 노트북: 화면이 캐릭터(-z) 쪽을 본다. setOn으로 화면을 켜고 끈다. */
+    export function laptop() {
+      const screenMaterial = new THREE.MeshStandardMaterial({
+        color: '#0d1018', emissive: '#ffffff', emissiveMap: codeScreen(), emissiveIntensity: 0.05,
+      });
+      const screen = new THREE.Mesh(new THREE.PlaneGeometry(0.44, 0.27), screenMaterial);
+      screen.rotation.y = Math.PI;
+      screen.position.set(0, 0.16, -0.012);
+      const lid = group(box(0.48, 0.32, 0.02, '#c5c8cf', [0, 0.16, 0]), screen);
+      lid.position.z = 0.15;
+      lid.rotation.x = 0.28;
+      const object = group(box(0.48, 0.025, 0.32, '#c5c8cf', [0, 0.012, 0]), lid);
+      return {
+        object,
+        setOn(on) {
+          screenMaterial.emissiveIntensity = on ? 1.4 : 0.05;
+        },
+      };
+    }
+
+    /** 은행원 스탠드: 황동 몸체 + 빛나는 갓. setLevel(0~1)로 밝기 조절 (아침·낮에는 꺼지고 밤에는 밝게) */
+    export function bankerLamp(shade) {
+      const brass = mat('#b08d4a', { metalness: 0.6, roughness: 0.4 });
+      const shadeMaterial = new THREE.MeshStandardMaterial({ color: shade, emissive: shade, emissiveIntensity: 1, roughness: 0.5 });
+      const hood = new THREE.Mesh(new THREE.CylinderGeometry(0.13, 0.13, 0.4, 16, 1, false, 0, Math.PI), shadeMaterial);
+      hood.rotation.z = Math.PI / 2;
+      hood.position.set(0, 0.5, 0.06);
+      // 책상 6~8개가 붙어 있어 빛이 겹치므로 한 개당 빛은 약하고 짧게
+      const light = new THREE.PointLight('#ffb35c', 1, 2.4, 2);
+      light.position.set(0, 0.4, 0.1);
+      return {
+        object: group(cyl(0.1, 0.12, 0.05, brass, [0, 0.025, 0], 16), cyl(0.016, 0.016, 0.46, brass, [0, 0.26, 0], 6), hood, light),
+        /** level 0이면 완전히 꺼진다 (광원은 그대로 두고 세기만 0 — 광원 수가 바뀌면 셰이더를 다시 컴파일함) */
+        setLevel(level) {
+          light.intensity = level * 1.05;
+          shadeMaterial.emissiveIntensity = level * 1.1;
+        },
+      };
+    }
+
+    /** 누워 있는 책: 앞·뒤 표지 + 책등 + 안쪽 종이 덩어리. 책등은 -x 쪽 */
+    export function book(color, length = 0.46, thickness = 0.08, width = 0.34) {
+      const cover = mat(color, { roughness: 0.6 });
+      return group(
+        box(length - 0.02, thickness - 0.02, width - 0.025, '#f3ecdc', [0.01, 0, 0]),
+        box(length, 0.012, width, cover, [0, thickness / 2 - 0.006, 0]),
+        box(length, 0.012, width, cover, [0, -thickness / 2 + 0.006, 0]),
+        box(0.016, thickness, width, cover, [-length / 2 + 0.008, 0, 0]),
+      );
+    }
+
+    /** 김이 나는 커피 머그. tick(t)를 매 프레임 호출하면 김이 피어오른다. */
+    export function coffeeMug(color = '#f2ece2') {
+      const height = 0.17;
+      const handle = new THREE.Mesh(new THREE.TorusGeometry(0.055, 0.016, 8, 16), mat(color));
+      handle.position.x = 0.095;
+      const steam = Array.from({ length: 3 }, () => {
+        const puff = new THREE.Mesh(
+          new THREE.SphereGeometry(0.035, 10, 8),
+          new THREE.MeshBasicMaterial({ color: '#ffffff', transparent: true, opacity: 0, depthWrite: false }));
+        return puff;
+      });
+      const object = group(
+        cyl(0.085, 0.075, height, color, [0, height / 2, 0], 20),
+        cyl(0.075, 0.075, 0.01, '#4a2c1a', [0, height - 0.012, 0], 20),   // 커피
+        handle,
+        ...steam,
+      );
+      handle.position.y = height / 2;
+      return {
+        object,
+        tick(t) {
+          steam.forEach((puff, i) => {
+            const phase = (t * 0.45 + i / steam.length) % 1;       // 0 → 1 로 올라가며 사라진다
+            puff.position.set(Math.sin(t * 2 + i) * 0.02, height + phase * 0.32, 0);
+            puff.scale.setScalar(0.6 + phase);
+            puff.material.opacity = Math.sin(phase * Math.PI) * 0.25;
+          });
+        },
+      };
+    }
+
+    /** 펼친 책: 양쪽 페이지가 V자로 살짝 들려 있다. setColor로 표지 색을 바꾼다. */
+    export function openBook() {
+      const cover = new THREE.MeshStandardMaterial({ color: '#e76f51', roughness: 0.6 });
+      const half = (side) => {
+        const g = group(
+          box(0.42, 0.014, 0.56, cover, [side * 0.21, 0, 0]),
+          box(0.4, 0.04, 0.53, '#f6f0e2', [side * 0.21, 0.027, 0]),
+        );
+        g.rotation.z = side * 0.1;
+        return g;
+      };
+      return { object: group(half(-1), half(1)), setColor: (c) => cover.color.set(c) };
+    }
+  index.html: |
+    <!doctype html>
+    <html lang="ko">
+    <head>
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1">
+      <title>StudyPals · 3D 스터디윗미</title>
+      <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📚</text></svg>">
+      <link rel="preconnect" href="https://fonts.googleapis.com">
+      <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+      <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Gaegu:wght@400;700&family=Gowun+Dodum&family=Jua&display=swap">
+      <link rel="stylesheet" href="base.css">
+      <link rel="stylesheet" href="views.css">
+      <link rel="stylesheet" href="planner.css">
+      <link rel="stylesheet" href="room.css">
+      <link rel="stylesheet" href="workspace.css">
+      <script type="importmap">
+        {
+          "imports": {
+            "three": "https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js",
+            "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/"
+          }
+        }
+      </script>
+    </head>
+    <body>
+      <div id="app"></div>
+      <div id="toast" role="status" aria-live="polite"></div>
+      <script type="module" src="app.js"></script>
+    </body>
+    </html>
+  library-decor.js: |
+    // 도서관 공간 장식: 책장·통유리 창·벽 조명·라운지 의자·화분. 좌표는 각 물건의 바닥 중심 기준.
+    import * as THREE from 'three';
+    import { METAL, OAK, WHITE } from './furniture.js';
+    import { box, cyl, group, mat } from './mesh.js';
+
+    const BOOK_COLORS = ['#f4f1ea', '#e9e4da', '#c94f45', '#3f5f8a', '#e0b84a', '#5f8a6a', '#2f3a4a', '#d98a6a', '#8a6fb0', '#f0d9b5'];
+
+    /** 칸칸이 책이 꽂힌 원목 책장. 길이 방향은 x, 책이 보이는 면은 +z. 책은 InstancedMesh 하나로 그린다. */
+    export function libraryShelf(length, height = 3.2, depth = 0.45) {
+      const cols = Math.round(length / 0.9);
+      const rows = Math.round(height / 0.5);
+      const cellW = length / cols;
+      const cellH = height / rows;
+      const g = group(
+        box(length, height, 0.04, OAK, [0, height / 2, -depth / 2]),
+        ...Array.from({ length: rows + 1 }, (_, r) => box(length, 0.04, depth, OAK, [0, r * cellH, 0])),
+        ...Array.from({ length: cols + 1 }, (_, c) => box(0.04, height, depth, OAK, [-length / 2 + c * cellW, height / 2, 0])),
+      );
+
+      const books = [];
+      for (let r = 0; r < rows; r++) {
+        for (let c = 0; c < cols; c++) {
+          let x = -length / 2 + c * cellW + 0.04;
+          const end = x + (cellW - 0.08) * (0.4 + Math.random() * 0.6);   // 칸마다 채운 정도가 다르게
+          while (x < end) {
+            const w = 0.035 + Math.random() * 0.035;
+            const h = cellH * (0.6 + Math.random() * 0.3);
+            books.push({ x: x + w / 2, y: r * cellH + 0.02 + h / 2, w, h });
+            x += w + 0.004;
+          }
+        }
+      }
+      const mesh = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), mat('#ffffff'), books.length);
+      const m = new THREE.Matrix4();
+      books.forEach((b, i) => {
+        m.compose(new THREE.Vector3(b.x, b.y, 0.02), new THREE.Quaternion(), new THREE.Vector3(b.w, b.h, depth * 0.75));
+        mesh.setMatrixAt(i, m);
+        mesh.setColorAt(i, new THREE.Color(BOOK_COLORS[Math.floor(Math.random() * BOOK_COLORS.length)]));
+      });
+      mesh.castShadow = mesh.receiveShadow = true;
+      g.add(mesh);
+      return g;
+    }
+
+    /** 통유리 창 벽. 길이 방향은 x, 실내는 +z. 가운데에 흰 기둥. */
+    export function windowWall(length, height) {
+      const frame = mat('#2e3136', { metalness: 0.4, roughness: 0.5 });
+      const glass = new THREE.Mesh(
+        new THREE.PlaneGeometry(length, height),
+        new THREE.MeshStandardMaterial({ color: '#d8eef5', transparent: true, opacity: 0.1, roughness: 0.05, depthWrite: false }));
+      glass.position.y = height / 2;
+      const mullions = Math.round(length / 1.6);
+      return group(
+        glass,
+        ...Array.from({ length: mullions + 1 }, (_, i) => box(0.1, height, 0.12, frame, [-length / 2 + (i * length) / mullions, height / 2, 0])),
+        ...[0.04, 2.5, 4.3, height - 0.05].map((y) => box(length, 0.1, 0.12, frame, [0, y, 0])),
+        box(length, 0.5, 0.6, WHITE, [0, height + 0.2, 0.2]),                          // 천장 보
+        box(0.7, height, 0.7, WHITE, [0, height / 2, 0.3]),                            // 가운데 기둥
+      );
+    }
+
+    /**
+     * 벽 조명(업라이트): 벽에 붙는 황동 받침 + 반원 갓. 실내 쪽은 +z.
+     * withLight가 false면 빛나는 갓만 둔다 (점광원이 많으면 렌더링이 무거워진다).
+     */
+    export function wallSconce({ withLight = true } = {}) {
+      const brass = mat('#b08d4a', { metalness: 0.6, roughness: 0.4 });
+      const shadeMaterial = new THREE.MeshStandardMaterial({
+        color: '#f3dfbf', emissive: '#ffcf8a', emissiveIntensity: 1, side: THREE.DoubleSide, roughness: 0.6,
+      });
+      const bowl = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.12, 0.2, 20, 1, true, -Math.PI / 2, Math.PI), shadeMaterial);
+      bowl.position.z = 0.02;
+      const object = group(box(0.1, 0.3, 0.03, brass, [0, -0.08, 0.015]), bowl);
+      const light = withLight ? new THREE.PointLight('#ffc27a', 1, 4, 1.8) : null;
+      if (light) {
+        light.position.set(0, 0.3, 0.3);
+        object.add(light);
+      }
+      return {
+        object,
+        setLevel(level) {
+          if (light) light.intensity = 0.1 + level * 1.6;
+          shadeMaterial.emissiveIntensity = 0.15 + level * 0.9;
+        },
+      };
+    }
+
+    /** 창가 가죽 라운지 의자 (등받이가 -z, 앉는 사람은 +z를 본다) */
+    export function armchair() {
+      const leather = mat('#8a4b2a', { roughness: 0.55 });
+      const back = box(0.8, 0.7, 0.16, leather, [0, 0.85, -0.3]);
+      back.rotation.x = -0.15;
+      return group(
+        box(0.8, 0.2, 0.7, leather, [0, 0.45, 0]),
+        back,
+        box(0.14, 0.3, 0.6, leather, [-0.42, 0.62, 0]),
+        box(0.14, 0.3, 0.6, leather, [0.42, 0.62, 0]),
+        cyl(0.04, 0.04, 0.35, METAL, [0, 0.18, 0], 8),
+        cyl(0.32, 0.32, 0.03, METAL, [0, 0.02, 0], 16),
+      );
+    }
+
+    export function sideTable() {
+      return group(cyl(0.3, 0.3, 0.04, WHITE, [0, 0.55, 0], 24), cyl(0.03, 0.03, 0.55, METAL, [0, 0.27, 0], 8));
+    }
+
+    export function plant(scale = 1) {
+      const leaves = new THREE.MeshStandardMaterial({ color: '#5f9a55', roughness: 0.9, flatShading: true });
+      const g = group(cyl(0.28, 0.22, 0.5, WHITE, [0, 0.25, 0]));
+      [[0, 1.0, 0, 0.42], [0.22, 0.8, 0.1, 0.32], [-0.2, 0.85, -0.08, 0.34], [0.05, 1.3, 0.05, 0.28]].forEach(([x, y, z, r]) => {
+        const leaf = new THREE.Mesh(new THREE.IcosahedronGeometry(r, 0), leaves);
+        leaf.position.set(x, y, z);
+        leaf.castShadow = true;
+        g.add(leaf);
+      });
+      g.scale.setScalar(scale);
+      return g;
+    }
+  lofi.js: |
+    // Web Audio로 직접 만드는 lo-fi 루프 (음원 파일 없음 → 저작권 걱정 없음)
+    // 코드 진행 + 베이스 + 스윙 드럼 + 바이닐 노이즈
+
+    const BPM = 72;
+    const BEAT = 60 / BPM;
+    const CHORDS = [   // Fmaj7 → Em7 → Dm7 → Cmaj7 (MIDI 번호)
+      [53, 57, 60, 64], [52, 55, 59, 62], [50, 53, 57, 60], [48, 52, 55, 59],
+    ];
+    const LOOKAHEAD = 0.2;   // 초 단위로 미리 예약
+
+    const freq = (midi) => 440 * 2 ** ((midi - 69) / 12);
+
+    export function createLofi() {
+      let ctx = null;
+      let master = null;
+      let timer = null;
+      let nextStep = 0;      // 다음 8분음표 시각
+      let step = 0;
+      let volume = 0.6;
+
+      function noiseBuffer(seconds, crackle = false) {
+        const buf = ctx.createBuffer(1, ctx.sampleRate * seconds, ctx.sampleRate);
+        const data = buf.getChannelData(0);
+        for (let i = 0; i < data.length; i++) {
+          data[i] = crackle ? (Math.random() < 0.0004 ? Math.random() * 2 - 1 : (Math.random() * 2 - 1) * 0.04)
+            : Math.random() * 2 - 1;
+        }
+        return buf;
+      }
+
+      function tone(type, f, start, length, gain, cutoff = 1800) {
+        const osc = ctx.createOscillator();
+        const amp = ctx.createGain();
+        const filter = ctx.createBiquadFilter();
+        osc.type = type;
+        osc.frequency.value = f;
+        osc.detune.value = (Math.random() - 0.5) * 12;   // 살짝 어긋난 음정이 테이프 느낌
+        filter.type = 'lowpass';
+        filter.frequency.value = cutoff;
+        amp.gain.setValueAtTime(0, start);
+        amp.gain.linearRampToValueAtTime(gain, start + 0.03);
+        amp.gain.exponentialRampToValueAtTime(0.0001, start + length);
+        osc.connect(filter).connect(amp).connect(master);
+        osc.start(start);
+        osc.stop(start + length + 0.05);
+      }
+
+      function hit(start, { cutoff, type, gain, length }) {
+        const src = ctx.createBufferSource();
+        const filter = ctx.createBiquadFilter();
+        const amp = ctx.createGain();
+        src.buffer = noiseBuffer(length);
+        filter.type = type;
+        filter.frequency.value = cutoff;
+        amp.gain.setValueAtTime(gain, start);
+        amp.gain.exponentialRampToValueAtTime(0.0001, start + length);
+        src.connect(filter).connect(amp).connect(master);
+        src.start(start);
+      }
+
+      function kick(start) {
+        const osc = ctx.createOscillator();
+        const amp = ctx.createGain();
+        osc.frequency.setValueAtTime(110, start);
+        osc.frequency.exponentialRampToValueAtTime(40, start + 0.25);
+        amp.gain.setValueAtTime(0.55, start);
+        amp.gain.exponentialRampToValueAtTime(0.0001, start + 0.35);
+        osc.connect(amp).connect(master);
+        osc.start(start);
+        osc.stop(start + 0.4);
+      }
+
+      /** 8분음표 하나(한 마디 = 8스텝)를 예약 */
+      function schedule(s, time) {
+        const beatInBar = s % 8;
+        const chord = CHORDS[Math.floor(s / 8) % CHORDS.length];
+        if (beatInBar === 0) chord.forEach((n) => tone('triangle', freq(n), time, BEAT * 3.8, 0.07));
+        if (beatInBar === 0 || beatInBar === 5) tone('sine', freq(chord[0] - 12), time, BEAT * 1.5, 0.22, 400);
+        if (beatInBar % 2 === 1 && Math.random() < 0.35) {
+          tone('sine', freq(chord[Math.floor(Math.random() * 4)] + 12), time, BEAT, 0.04, 2500);
+        }
+        if (beatInBar === 0 || beatInBar === 5) kick(time);
+        if (beatInBar === 2 || beatInBar === 6) hit(time, { type: 'bandpass', cutoff: 1800, gain: 0.18, length: 0.18 });
+        hit(time, { type: 'highpass', cutoff: 7000, gain: 0.05, length: 0.05 });
+      }
+
+      function tick() {
+        while (nextStep < ctx.currentTime + LOOKAHEAD) {
+          const swing = step % 2 ? BEAT * 0.08 : 0;   // 뒷박을 살짝 늦게
+          schedule(step, nextStep + swing);
+          nextStep += BEAT / 2;
+          step++;
+        }
+      }
+
+      function vinyl() {
+        const src = ctx.createBufferSource();
+        const amp = ctx.createGain();
+        src.buffer = noiseBuffer(4, true);
+        src.loop = true;
+        amp.gain.value = 0.25;
+        src.connect(amp).connect(master);
+        src.start();
+      }
+
+      return {
+        get playing() { return timer !== null; },
+        async play() {
+          if (!ctx) {
+            ctx = new AudioContext();
+            const warm = ctx.createBiquadFilter();
+            warm.type = 'lowpass';
+            warm.frequency.value = 4200;
+            master = ctx.createGain();
+            master.gain.value = volume * 0.8;
+            master.connect(warm).connect(ctx.destination);
+            vinyl();
+          }
+          await ctx.resume();
+          nextStep = ctx.currentTime + 0.1;
+          timer = setInterval(tick, 50);
+        },
+        pause() {
+          clearInterval(timer);
+          timer = null;
+          ctx?.suspend();
+        },
+        setVolume(v) {
+          volume = v;
+          if (master) master.gain.value = v * 0.8;
+        },
+        close() {
+          this.pause();
+          ctx?.close();
+          ctx = null;
+        },
+      };
+    }
+  mesh.js: |
+    // 3D 도형·재질 헬퍼 (재질은 색별로 캐시해서 재사용)
+    import * as THREE from 'three';
+
+    const cache = new Map();
+
+    export function mat(color, extra = {}) {
+      const key = color + JSON.stringify(extra);
+      if (!cache.has(key)) cache.set(key, new THREE.MeshStandardMaterial({ color, roughness: 0.8, ...extra }));
+      return cache.get(key);
+    }
+
+    /** 빛나는 재질 (블룸 효과로 번져 보인다) */
+    export const glow = (color, intensity = 2) => mat(color, { emissive: color, emissiveIntensity: intensity });
+
+    /** 봉제인형 느낌의 털/천 재질 */
+    export function plush(color) {
+      const key = `plush${color}`;
+      if (!cache.has(key)) {
+        cache.set(key, new THREE.MeshPhysicalMaterial({
+          color, roughness: 0.95, sheen: 1, sheenRoughness: 0.6, sheenColor: new THREE.Color(color).lerp(new THREE.Color('#ffffff'), 0.5),
+        }));
+      }
+      return cache.get(key);
+    }
+
+    function place(mesh, [x, y, z]) {
+      mesh.position.set(x, y, z);
+      mesh.castShadow = mesh.receiveShadow = true;
+      return mesh;
+    }
+
+    const asMaterial = (m) => (m instanceof THREE.Material ? m : mat(m));
+
+    export const box = (w, h, d, m, pos = [0, 0, 0]) =>
+      place(new THREE.Mesh(new THREE.BoxGeometry(w, h, d), asMaterial(m)), pos);
+
+    export const cyl = (rTop, rBottom, h, m, pos = [0, 0, 0], segments = 20) =>
+      place(new THREE.Mesh(new THREE.CylinderGeometry(rTop, rBottom, h, segments), asMaterial(m)), pos);
+
+    export function sphere(r, m, pos = [0, 0, 0], scale = [1, 1, 1]) {
+      const mesh = place(new THREE.Mesh(new THREE.SphereGeometry(r, 24, 16), asMaterial(m)), pos);
+      mesh.scale.set(...scale);
+      return mesh;
+    }
+
+    export const capsule = (r, len, m, pos = [0, 0, 0]) =>
+      place(new THREE.Mesh(new THREE.CapsuleGeometry(r, len, 6, 12), asMaterial(m)), pos);
+
+    export function group(...children) {
+      const g = new THREE.Group();
+      g.add(...children);
+      return g;
+    }
+  planner-page.js: |
+    // 플래너 페이지: 최근 7일 공부시간 막대 + 종이 플래너 시트 + 과목·할 일 관리
+    import { get } from './api.js';
+    import { createPlanner } from './planner-view.js';
+    import { mountShell } from './shell.js';
+    import { fmtDate, fmtShort, h } from './ui.js';
+
+    export function mountPlannerPage(root, ctx) {
+      const shell = mountShell(root, ctx, 'planner');
+      const week = h('div', { class: 'card week' });
+      const box = h('div');
+      let days = [];
+      let selected = null;
+
+      shell.main.append(
+        h('div', { class: 'page-head' },
+          h('div', {}, h('span', { class: 'eyebrow' }, '하루를 쌓는 작은 습관'), h('h1', {}, '플래너'),
+            h('p', {}, '오늘 할 일과 공부할 시간을 정리해보세요.'))),
+        week,
+        box);
+
+      const planner = createPlanner(box, {
+        onChange: (d) => {
+          selected = d.day.date;
+          if (d.editable) shell.setToday(d.study.totalSec);
+          loadWeek();
+        },
+      });
+
+      /** 최근 7일: 막대 높이 = 공부시간 (가장 많이 한 날 기준), 누르면 그날 기록 */
+      async function loadWeek() {
+        try {
+          days = (await get('/planner/history')).days;
+        } catch {
+          return;
+        }
+        const max = Math.max(3600, ...days.map((d) => d.totalSec));
+        week.replaceChildren(
+          h('div', { class: 'sheet-label' }, '최근 7일'),
+          h('div', { class: 'week-bars' }, days.map((d) => h('button', {
+            class: `week-day${d.date === selected ? ' on' : ''}`, title: `${fmtDate(d.date)} · 할 일 ${d.done}/${d.planned}`,
+            onClick: () => planner.load(d.date),
+          },
+          h('span', { class: 'week-bar' }, h('i', { style: `height:${(d.totalSec / max) * 100}%` })),
+          h('strong', {}, fmtShort(d.totalSec)),
+          h('small', {}, fmtDate(d.date))))));
+      }
+
+      planner.load();
+      return () => shell.destroy();
+    }
+  planner-sheet.js: |
+    // 종이 플래너 한 장: TODAY'S(날짜 이동) · D-DAY · TOTAL TIME · 오늘의 한마디 · CONTENTS · TIMETABLE
+    import { timetable } from './timetable.js';
+    import { fmtDate, fmtShort, h, shiftDate } from './ui.js';
+
+    const MONTHS = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
+    const DAY_MS = 86_400_000;
+
+    /** 1 → 1st, 2 → 2nd, 11 → 11th, 23 → 23rd */
+    function ordinal(n) {
+      if (n % 100 >= 11 && n % 100 <= 13) return `${n}th`;
+      return n + ({ 1: 'st', 2: 'nd', 3: 'rd' }[n % 10] ?? 'th');
+    }
+
+    const parts = (ymd) => [Number(ymd.slice(0, 4)), Number(ymd.slice(4, 6)), Number(ymd.slice(6, 8))];
+    const toInputDate = (ymd) => ymd.replace(/(\d{4})(\d{2})(\d{2})/, '$1-$2-$3');
+
+    /** 20261030 → "OCT. 30th" */
+    function paperDate(ymd) {
+      const [, month, day] = parts(ymd);
+      return `${MONTHS[month - 1]}. ${ordinal(day)}`;
+    }
+
+    /** 기준 날짜에서 D-DAY까지: "D-12" / "D-DAY" / "D+3" */
+    function ddayText(target, from) {
+      const utc = (ymd) => { const [y, m, d] = parts(ymd); return Date.UTC(y, m - 1, d); };
+      const days = Math.round((utc(target) - utc(from)) / DAY_MS);
+      return days === 0 ? 'D-DAY' : days > 0 ? `D-${days}` : `D+${-days}`;
+    }
+
+    /**
+     * @param data    GET /api/planner 응답
+     * @param actions { load(date), toggleDone(task), saveDaily(patch), saveTimetable(cells), saveDday(title, date) }
+     */
+    export function plannerSheet(data, actions) {
+      const { day, editable } = data;
+      const subjectOf = (id) => data.subjects.find((s) => s.id === id);
+
+      const dateBox = h('div', { class: 'sheet-box sheet-date' },
+        h('div', { class: 'sheet-label' }, "TODAY'S"),
+        h('div', { class: 'date-nav' },
+          h('button', { class: 'icon', title: '전날', onClick: () => actions.load(shiftDate(day.date, -1)) }, '◀'),
+          h('strong', { class: 'hand big' }, paperDate(day.date)),
+          h('button', { class: 'icon', title: '다음 날', disabled: editable, onClick: () => actions.load(shiftDate(day.date, 1)) }, '▶')),
+        h('small', {}, editable ? `오늘 · ${fmtDate(day.date)}` : `지난 기록 · ${fmtDate(day.date)}`),
+        !editable && h('button', { class: 'chip-btn', onClick: () => actions.load() }, '오늘로'));
+
+      const ddayBox = h('details', { class: 'sheet-box sheet-dday' },
+        h('summary', {},
+          h('div', { class: 'sheet-label' }, 'D-DAY'),
+          h('strong', { class: 'hand big' }, data.dday ? ddayText(data.dday.date, day.date) : '－'),
+          h('small', {}, data.dday?.title ?? '눌러서 설정')),
+        h('form', { class: 'stack', onSubmit: (e) => {
+          e.preventDefault();
+          const f = new FormData(e.target);
+          actions.saveDday(f.get('title'), String(f.get('date')).replaceAll('-', ''));
+        } },
+        h('input', { name: 'title', placeholder: '예: 정보처리기사', maxLength: 20, value: data.dday?.title ?? '' }),
+        h('input', { name: 'date', type: 'date', value: data.dday ? toInputDate(data.dday.date) : '' }),
+        h('button', { class: 'btn small', type: 'submit' }, '저장 (이름을 비우면 해제)')));
+
+      const goal = day.goalMin * 60;
+      const totalBox = h('div', { class: 'sheet-box sheet-total' },
+        h('div', { class: 'sheet-label' }, 'TOTAL TIME'),
+        h('strong', { class: 'hand big' }, fmtShort(data.study.totalSec)),
+        h('label', { class: 'goal' }, '목표',
+          h('input', { type: 'number', min: 0, max: 1440, step: 10, value: day.goalMin, disabled: !editable,
+            onChange: (e) => actions.saveDaily({ goalMin: Number(e.target.value) }) }), '분'),
+        h('div', { class: 'progress' }, h('div', { class: 'bar' },
+          h('span', { style: `width:${goal ? Math.min(100, (data.study.totalSec / goal) * 100) : 0}%` }))));
+
+      const memo = h('label', { class: 'sheet-memo' },
+        h('span', { class: 'sheet-label' }, '오늘의 한마디'),
+        h('input', { class: 'hand', value: day.memo, maxLength: 200, disabled: !editable,
+          placeholder: editable ? '오늘의 다짐이나 메모를 적어요' : '',
+          onChange: (e) => actions.saveDaily({ memo: e.target.value }) }));
+
+      return h('section', { class: `card sheet${editable ? '' : ' past'}` },
+        h('div', { class: 'sheet-top' }, dateBox, ddayBox, totalBox),
+        memo,
+        h('div', { class: 'sheet-body' }, contents(data, subjectOf, actions), timetable(data, { save: actions.saveTimetable })));
+    }
+
+    /** CONTENTS: 그날 할 일을 과목별로 묶고 형광펜처럼 칠한다. 완료는 O */
+    function contents(data, subjectOf, actions) {
+      const tasks = data.day.taskIds.map((id) => data.tasks.find((t) => t.id === id)).filter(Boolean);
+      const groups = new Map();
+      for (const t of tasks) groups.set(t.subjectId, [...(groups.get(t.subjectId) ?? []), t]);
+      return h('div', { class: 'contents' },
+        h('div', { class: 'sheet-label' }, 'CONTENTS'),
+        groups.size === 0 && h('p', { class: 'empty' },
+          data.editable ? '오른쪽 과목 목록에서 ＋오늘을 눌러 담아요' : '이 날은 담아 둔 할 일이 없어요'),
+        [...groups].map(([subjectId, list]) => {
+          const subject = subjectOf(subjectId);
+          return h('div', { class: 'contents-group', style: `--c:${subject?.color}` },
+            h('span', { class: 'hand subject-name' }, subject?.name),
+            h('ul', {}, list.map((t) => h('li', { class: t.done ? 'done' : '' },
+              h('span', { class: 'hand highlight' }, t.title),
+              h('button', { class: 'mark', disabled: !data.editable, title: t.done ? '완료 취소' : '완료',
+                onClick: () => actions.toggleDone(t) }, t.done ? 'O' : '')))));
+        }));
+    }
+  planner-view.js: |
+    // 플래너: 과목 → 할 일(과목별 백로그) → 그날의 플래너
+    // 기본(플래너 페이지): 종이 플래너 시트(planner-sheet.js, 지난 날짜는 읽기 전용) + 과목 관리 카드
+    // compact 모드(공부방): 오늘 목록 + 백로그에서 추가
+    import { del, get, patch, post, put } from './api.js';
+    import { plannerSheet } from './planner-sheet.js';
+    import { SUBJECT_COLORS, fill, fmtDate, fmtShort, h, swatches, toast } from './ui.js';
+
+    export function createPlanner(container, { compact = false, onChange } = {}) {
+      let data = null;
+      let newSubjectColor = SUBJECT_COLORS[0];
+      let focusSubject = null;          // 할 일 추가 후 같은 입력창에 다시 포커스
+      const openSubjects = new Set();
+      const progress = h('div', { class: 'progress' });
+      const colorBox = h('div');        // 색만 다시 그려서 입력 중인 과목 이름을 지키기
+      const drawColors = () => colorBox.replaceChildren(
+        swatches(SUBJECT_COLORS, newSubjectColor, (c) => { newSubjectColor = c; drawColors(); }));
+
+      const subjectOf = (id) => data.subjects.find((s) => s.id === id);
+      const taskOf = (id) => data.tasks.find((t) => t.id === id);
+      const dayIds = () => data.day.taskIds;
+
+      async function act(request) {
+        try {
+          apply(await request);
+        } catch (err) {
+          toast(err.message);
+        }
+      }
+
+      function apply(next) {
+        data = next;
+        draw();
+        onChange?.(data);
+      }
+
+      const load = (date) => act(get(`/planner${date ? `?date=${date}` : ''}`));
+      const setToday = (ids) => act(put('/daily', { taskIds: ids }));
+      const toggleDone = (t) => act(patch(`/tasks/${t.id}`, { done: !t.done }));
+      const sheetActions = {
+        load,
+        toggleDone,
+        saveDaily: (changes) => act(put('/daily', changes)),
+        saveTimetable: (cells) => act(put('/timetable', { timetable: cells })),
+        saveDday: (title, date) => act(put('/dday', { title, date })),
+      };
+
+      // ---------- 오늘의 플래너 (공부방 compact) ----------
+
+      function drawProgress() {
+        const goal = data.day.goalMin * 60;
+        const studied = data.study.totalSec;
+        const ratio = goal ? Math.min(1, studied / goal) : 0;
+        const bySubject = Object.entries(data.study.bySubject).filter(([id]) => subjectOf(id));
+        fill(progress,
+          h('div', { class: 'bar' }, h('span', { style: `width:${ratio * 100}%` })),
+          h('small', {}, `${fmtShort(studied)} / 목표 ${fmtShort(goal)}`),
+          bySubject.length > 0 && h('div', { class: 'subject-times' }, bySubject.map(([id, sec]) =>
+            h('span', { class: 'chip', style: `--c:${subjectOf(id).color}` }, h('i', { class: 'dot' }), `${subjectOf(id).name} ${fmtShort(sec)}`))));
+      }
+
+      function daySection() {
+        const tasks = dayIds().map(taskOf).filter(Boolean);
+        const done = tasks.filter((t) => t.done).length;
+        const empty = !data.editable ? '이 날은 담아 둔 할 일이 없어요'
+          : compact ? '아래에서 과목의 할 일을 골라 추가해요' : '과목의 할 일에서 ＋오늘을 눌러 오늘 목록을 채워요';
+        return h('div', { class: 'today' },
+          h('div', { class: 'row between' },
+            h('h3', {}, `${data.editable ? '오늘' : '그날'} 할 일 ${done}/${tasks.length}`),
+            h('label', { class: 'goal' }, '목표',
+              h('input', { type: 'number', min: 0, max: 1440, step: 10, value: data.day.goalMin, disabled: !data.editable,
+                onChange: (e) => act(put('/daily', { goalMin: Number(e.target.value) })) }),
+              '분')),
+          progress,
+          tasks.length ? h('ul', { class: 'tasks' }, tasks.map((t) => taskRow(t, { inDay: true }))) : h('p', { class: 'empty' }, empty),
+          !data.editable && h('small', {}, '지난 기록은 볼 수만 있어요'));
+      }
+
+      function taskRow(t, { inDay }) {
+        const subject = subjectOf(t.subjectId);
+        const inToday = data.editable && dayIds().includes(t.id);
+        const readOnly = inDay && !data.editable;
+        return h('li', { class: `task${t.done ? ' done' : ''}` },
+          h('input', { type: 'checkbox', checked: t.done, disabled: readOnly, onChange: () => toggleDone(t), 'aria-label': '완료' }),
+          inDay && h('i', { class: 'dot', style: `--c:${subject?.color}`, title: subject?.name }),
+          h('span', { class: 'title' }, t.title),
+          inDay
+            ? !readOnly && h('button', { class: 'icon', title: '오늘 목록에서 빼기',
+              onClick: () => setToday(dayIds().filter((id) => id !== t.id)) }, '↩')
+            // 지난 날짜를 보는 중에는 오늘 목록을 모르므로 ＋오늘을 숨긴다
+            : data.editable && !t.done && h('button', { class: `chip-btn${inToday ? ' on' : ''}`, disabled: inToday,
+              onClick: () => setToday([...dayIds(), t.id]) }, inToday ? '오늘 ✓' : '＋오늘'),
+          !inDay && h('button', { class: 'icon', title: '삭제', onClick: () => act(del(`/tasks/${t.id}`)) }, '✕'));
+      }
+
+      // ---------- 과목 관리 (플래너 페이지) ----------
+
+      function subjectsSection() {
+        return h('div', { class: 'subjects' },
+          h('div', { class: 'planner-head' }, h('h2', {}, '과목과 할 일'), h('small', {}, data.editable ? '＋오늘로 오늘 목록에 담기' : '')),
+          !data.subjects.length && h('p', { class: 'empty' }, '먼저 과목을 만들어 보세요 (예: 알고리즘, 영어)'),
+          data.subjects.map(subjectBlock),
+          h('form', { class: 'add-subject', onSubmit: addSubject },
+            h('input', { name: 'name', placeholder: '새 과목 이름', maxLength: 20, required: true }),
+            colorBox,
+            h('button', { class: 'btn small', type: 'submit' }, '과목 추가')));
+      }
+
+      function subjectBlock(s) {
+        const tasks = data.tasks.filter((t) => t.subjectId === s.id);
+        const open = openSubjects.has(s.id);
+        const input = h('input', { name: 'title', placeholder: '할 일 추가', maxLength: 50, required: true });
+        if (focusSubject === s.id) queueMicrotask(() => input.focus());
+        return h('div', { class: `subject${open ? ' open' : ''}`, style: `--c:${s.color}` },
+          h('div', { class: 'subject-head' },
+            h('button', { class: 'subject-toggle', onClick: () => toggleOpen(s.id) },
+              h('i', { class: 'dot' }), s.name,
+              h('small', {}, `${tasks.filter((t) => !t.done).length}개 남음`)),
+            h('button', { class: 'icon', title: '과목 삭제', onClick: () => removeSubject(s) }, '🗑')),
+          open && h('div', { class: 'subject-body' },
+            h('ul', { class: 'tasks' }, tasks.map((t) => taskRow(t, { inDay: false }))),
+            h('form', { class: 'row', onSubmit: (e) => addTask(e, s.id) },
+              input, h('button', { class: 'btn small', type: 'submit' }, '추가'))));
+      }
+
+      function toggleOpen(id) {
+        openSubjects.has(id) ? openSubjects.delete(id) : openSubjects.add(id);
+        draw();
+      }
+
+      function addSubject(e) {
+        e.preventDefault();
+        const name = new FormData(e.target).get('name');
+        act(post('/subjects', { name, color: newSubjectColor }).then((d) => {
+          openSubjects.add(d.subjects.at(-1).id);
+          return d;
+        }));
+      }
+
+      function addTask(e, subjectId) {
+        e.preventDefault();
+        focusSubject = subjectId;
+        act(post('/tasks', { subjectId, title: new FormData(e.target).get('title') }));
+      }
+
+      function removeSubject(s) {
+        if (confirm(`'${s.name}' 과목과 할 일을 모두 삭제할까요?`)) act(del(`/subjects/${s.id}`));
+      }
+
+      // ---------- 백로그에서 추가 (compact) ----------
+
+      function backlogPicker() {
+        const select = h('select', { 'aria-label': '추가할 할 일' },
+          h('option', { value: '' }, '과목의 할 일 고르기'),
+          data.subjects.map((s) => {
+            const left = data.tasks.filter((t) => t.subjectId === s.id && !t.done && !dayIds().includes(t.id));
+            return left.length && h('optgroup', { label: s.name },
+              left.map((t) => h('option', { value: t.id }, t.title)));
+          }));
+        return h('div', { class: 'row backlog' }, select,
+          h('button', { class: 'btn small', onClick: () => select.value && setToday([...dayIds(), select.value]) }, '추가'));
+      }
+
+      function draw() {
+        if (compact) {
+          container.replaceChildren(
+            h('div', { class: 'planner-head' }, h('h2', {}, '오늘의 플래너'), h('small', {}, fmtDate(data.day.date))),
+            daySection(), backlogPicker());
+        } else {
+          container.replaceChildren(h('div', { class: 'planner-grid' },
+            plannerSheet(data, sheetActions),
+            h('section', { class: 'card planner' }, subjectsSection())));
+        }
+        drawProgress();
+        drawColors();
+        focusSubject = null;
+      }
+
+      return {
+        /** date(YYYYMMDD)를 주면 그날 기록, 없으면 오늘 */
+        load,
+        get data() { return data; },
+        /** 공부방 하트비트로 받은 오늘 공부시간을 진행 막대에만 반영 */
+        setStudy(study) {
+          if (!data) return;
+          data.study = study;
+          drawProgress();
+        },
+      };
+    }
+  planner.css: |
+    /* 플래너 페이지: 최근 7일 · 종이 플래너 시트(TODAY'S · D-DAY · TOTAL TIME · 한마디 · CONTENTS · TIMETABLE) */
+
+    /* ---------- 최근 7일 ---------- */
+    .week { display: flex; align-items: center; gap: 16px; padding: 12px 18px; }
+    .week-bars { flex: 1; display: grid; grid-template-columns: repeat(7, 1fr); gap: 8px; }
+    .week-day {
+      display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 6px 2px;
+      border: 2px solid transparent; border-radius: 12px; background: none; cursor: pointer; font: inherit;
+    }
+    .week-day:hover { background: #f8f0e2; }
+    .week-day.on { border-color: var(--leaf); background: #eef7e8; }
+    .week-day strong { font-size: 0.8rem; }
+    .week-bar { width: 22px; height: 46px; border-radius: 6px; background: #f1e6d2; display: flex; align-items: flex-end; overflow: hidden; }
+    .week-bar i { width: 100%; background: linear-gradient(180deg, #a7d38e, var(--leaf)); border-radius: 6px; min-height: 2px; }
+
+    /* ---------- 시트 ---------- */
+    .sheet {
+      --grid: rgba(120, 100, 70, 0.08);
+      display: flex; flex-direction: column; gap: 14px;
+      background-color: #fffefa;
+      background-image: linear-gradient(var(--grid) 1px, transparent 1px), linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+      background-size: 18px 18px;
+    }
+    .sheet.past { --grid: rgba(120, 100, 70, 0.05); background-color: #faf7f1; }
+    .sheet-label { font: 0.72rem var(--font-title); letter-spacing: 2px; color: #8f87b8; }
+    .hand { font-family: var(--font-hand); }
+    .hand.big { font-size: 1.9rem; line-height: 1.1; color: #5b5aa6; }
+
+    .sheet-top { display: grid; grid-template-columns: 1.6fr 1fr 1fr; gap: 10px; }
+    .sheet-box {
+      display: flex; flex-direction: column; gap: 4px; padding: 10px 12px;
+      border: 2px solid var(--line); border-radius: 14px; background: rgba(255, 255, 255, 0.85);
+    }
+    .sheet-date .date-nav { display: flex; align-items: center; gap: 6px; }
+    .sheet-date .chip-btn { align-self: flex-start; }
+    .sheet-dday summary { list-style: none; cursor: pointer; display: flex; flex-direction: column; gap: 4px; }
+    .sheet-dday summary::-webkit-details-marker { display: none; }
+    .sheet-dday[open] form { margin-top: 8px; }
+    .sheet-total .goal input { width: 64px; }
+
+    .sheet-memo {
+      display: flex; align-items: center; gap: 10px; padding: 8px 12px;
+      border: 2px dashed var(--line); border-radius: 14px; background: rgba(255, 255, 255, 0.8);
+    }
+    .sheet-memo .sheet-label { white-space: nowrap; }
+    .sheet-memo input { border: 0; background: transparent; font-size: 1.25rem; padding: 2px 4px; }
+    .sheet-memo input:focus { background: #fff; }
+
+    .sheet-body { display: grid; grid-template-columns: minmax(0, 1fr) 236px; gap: 16px; align-items: start; }
+
+    /* ---------- CONTENTS ---------- */
+    .contents { display: flex; flex-direction: column; gap: 10px; }
+    .contents-group { display: grid; grid-template-columns: 70px 1fr; gap: 8px; align-items: start; }
+    .contents-group .subject-name { font-size: 1.15rem; color: var(--c); filter: brightness(0.75); padding-top: 4px; overflow-wrap: anywhere; }
+    .contents-group ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+    .contents-group li { display: flex; align-items: center; gap: 8px; border-bottom: 1px solid #eee5d6; padding-bottom: 4px; }
+    .highlight {
+      flex: 1; font-size: 1.15rem; padding: 0 4px; overflow-wrap: anywhere;
+      /* 형광펜: 글자 아래쪽 60%만 과목 색으로 칠한다 */
+      background: linear-gradient(transparent 40%, color-mix(in srgb, var(--c) 45%, transparent) 40%);
+    }
+    .contents-group li.done .highlight { color: var(--muted); }
+    .mark {
+      width: 28px; height: 28px; flex: none; border: 2px solid #c9bfd9; border-radius: 6px; background: #fff;
+      font: 700 1.2rem var(--font-hand); color: #5b5aa6; cursor: pointer;
+    }
+    .mark:disabled { cursor: default; }
+    .contents-group li.done .mark { border-color: #5b5aa6; }
+
+    /* ---------- TIMETABLE ---------- */
+    .timetable { display: flex; flex-direction: column; gap: 6px; }
+    .tt-palette { display: flex; flex-wrap: wrap; gap: 4px; }
+    .tt-brush {
+      display: inline-flex; align-items: center; gap: 4px; padding: 3px 8px;
+      border: 2px solid var(--line); border-radius: 999px; background: #fff; font-size: 0.78rem; cursor: pointer;
+    }
+    .tt-brush .dot { background: var(--c); border: 1px solid #d8cdbb; }
+    .tt-brush.on { border-color: var(--ink); }
+    .tt-grid { display: flex; flex-direction: column; border: 2px solid #c9bfd9; border-radius: 8px; overflow: hidden; background: #fff; user-select: none; }
+    .tt-grid.editable { touch-action: none; cursor: crosshair; }
+    .tt-row { display: grid; grid-template-columns: 26px repeat(6, 1fr); height: 20px; border-top: 1px solid #e6e0f0; }
+    .tt-row:first-child { border-top: 0; }
+    .tt-hour { font: 0.72rem var(--font-title); color: #8f87b8; display: grid; place-items: center; border-right: 1px solid #c9bfd9; }
+    .tt-cell { position: relative; border-left: 1px dotted #e6e0f0; }
+    .tt-cell.planned { background: color-mix(in srgb, var(--c) 55%, white); }
+    .tt-cell.now { outline: 2px solid #e76f51; outline-offset: -2px; z-index: 1; }
+    .tt-actual, .tt-legend .tt-actual { display: block; position: absolute; left: 1px; right: 1px; bottom: 2px; height: 5px; border-radius: 3px; background: #5b5aa6; }
+    .tt-legend { display: flex; align-items: center; gap: 6px; }
+    .tt-legend .tt-actual { position: static; width: 18px; }
+
+    @media (max-width: 960px) {
+      .sheet-body { grid-template-columns: 1fr; }
+    }
+    @media (max-width: 640px) {
+      .sheet-top { grid-template-columns: 1fr 1fr; }
+      .sheet-date { grid-column: 1 / -1; }
+      .week { flex-direction: column; align-items: stretch; }
+      .week-bar { width: 16px; }
+    }
+  room-hud.js: |
+    // 공부방 화면의 HUD(상단 바·참가자·하단 도크). 상태는 room-view.js가 갖고, 여기서는 그리기만 한다.
+    import { STATUS, characterOf, fmtClock, fmtShort, h } from './ui.js';
+
+    export function createHud(on) {
+      const roomName = h('strong', {});
+      const codeBox = h('span', {});
+      const daylightChip = h('span', { class: 'badge daylight' });
+      const members = h('ul', { class: 'members' });
+      const timer = h('div', { class: 'timer' }, '00:00:00');
+      const statusPill = h('span', { class: 'status-pill' });
+      const subjectSelect = h('select', { 'aria-label': '지금 공부하는 과목', onChange: (e) => on.subject(e.target.value || null) });
+      const controls = h('div', { class: 'controls' });
+      const cameraBox = h('div', { class: 'camera' });
+      const musicBtn = h('button', { class: 'btn ghost small', onClick: on.music }, '🎵 lo-fi 켜기');
+      const plannerBox = h('div', { class: 'planner compact' });
+      const plannerPanel = h('aside', { class: 'panel left card' }, plannerBox);
+
+      const el = h('div', { class: 'room-screen' },
+        h('div', { class: 'stage' }),
+        h('header', { class: 'room-top' },
+          h('button', { class: 'btn ghost small', onClick: on.leave }, '← 공부방 목록'),
+          h('div', { class: 'room-title' }, roomName, codeBox, daylightChip),
+          h('div', { class: 'row' },
+            h('button', { class: 'btn ghost small', onClick: () => plannerPanel.classList.toggle('hidden') }, '📒 플래너'),
+            musicBtn,
+            h('input', { type: 'range', min: 0, max: 1, step: 0.05, value: 0.6, 'aria-label': '음량',
+              onInput: (e) => on.volume(Number(e.target.value)) }))),
+        plannerPanel,
+        h('aside', { class: 'panel right card' }, h('h3', {}, '함께 공부 중'), members),
+        h('div', { class: 'session' }, h('div', { class: 'session-label' }, '오늘의 공부 ', statusPill), timer),
+        h('footer', { class: 'dock card' },
+          h('label', { class: 'dock-subject' }, h('small', {}, '지금 공부하는 과목'), subjectSelect),
+          controls,
+          cameraBox));
+
+      return {
+        el,
+        stage: el.querySelector('.stage'),
+        plannerBox,
+
+        setRoom(room) {
+          roomName.textContent = room.name;
+          codeBox.replaceChildren(room.code
+            ? h('button', { class: 'badge private', title: '코드 복사', onClick: () => on.copyCode(room.code) }, `🔒 ${room.code}`)
+            : h('span', { class: 'badge' }, '공개방'));
+        },
+
+        renderMembers(list, myId) {
+          const sorted = [...list].sort((a, b) => (a.seat ?? 99) - (b.seat ?? 99));
+          members.replaceChildren(...sorted.map((m) => h('li', { class: m.id === myId ? 'me' : '' },
+            h('span', { class: 'avatar', style: `--c:${characterOf(m.character).color}` }, characterOf(m.character).emoji),
+            h('div', {}, h('strong', {}, m.name, m.id === myId && ' (나)'),
+              h('small', {}, m.seat == null ? '자리 고르는 중' : `${STATUS[m.status].label} · 오늘 ${fmtShort(m.todaySec)}`)),
+            h('span', { class: `dot-status ${m.status}` }))));
+        },
+
+        renderControls(state, status) {
+          statusPill.className = `status-pill ${status}`;
+          statusPill.textContent = state.seat == null ? '빈 자리를 클릭해 앉으세요' : `${STATUS[status].emoji} ${STATUS[status].label}`;
+          const btn = (label, onClick, cls = '') => h('button', { class: `btn ${cls}`, onClick, disabled: state.seat == null }, label);
+          const seg = (mode, label) => h('button', { class: `seg${state.mode === mode ? ' on' : ''}`, onClick: () => on.mode(mode) }, label);
+          controls.replaceChildren(
+            state.running
+              ? h('div', { class: 'row' },
+                btn(state.onBreak ? '▶ 다시 공부' : '☕ 휴식', on.toggleBreak),
+                btn('■ 그만하기', on.stop, 'ghost'))
+              : btn('▶ 공부 시작', on.start, 'primary'),
+            h('div', { class: 'row mode' }, seg('manual', '✋ 수동'), seg('camera', '📷 자리 감지')));
+        },
+
+        /** 창밖 시간대 표시: "🌇 노을 18:30" */
+        setDaylight(d) {
+          const hh = String(Math.floor(d.hours)).padStart(2, '0');
+          const mm = String(Math.floor((d.hours % 1) * 60)).padStart(2, '0');
+          daylightChip.textContent = `${d.name} ${hh}:${mm}`;
+        },
+
+        renderTimer(sec) {
+          timer.textContent = fmtClock(Math.floor(sec));
+        },
+
+        setSubjects(subjects, selected) {
+          subjectSelect.replaceChildren(h('option', { value: '' }, '시간표 계획대로'),
+            ...subjects.map((s) => h('option', { value: s.id, selected: s.id === selected }, s.name)));
+        },
+
+        setCamera(video, message) {
+          cameraBox.replaceChildren(...(video ? [video, h('i', { class: 'led' })] : message ? [h('small', {}, message)] : []));
+        },
+
+        setDetected(detected) {
+          cameraBox.classList.toggle('detected', detected);
+        },
+
+        setMusic(playing) {
+          musicBtn.textContent = playing ? '🎵 lo-fi 끄기' : '🎵 lo-fi 켜기';
+        },
+      };
+    }
+  room-model.js: |
+    // 도서관 디오라마: 통유리 창(창밖은 실제 시각의 하늘) · 양쪽 원목 책장 · 창가 라운지
+    // + 가운데 책상 섬(좌석, 책상마다 스탠드) 배치
+    import * as THREE from 'three';
+    import { DESK, bankerLamp, deskSet, laptop } from './furniture.js';
+    import { armchair, libraryShelf, plant, sideTable, wallSconce, windowWall } from './library-decor.js';
+    import { box, group } from './mesh.js';
+    import { createSkyView, woodFloor } from './textures.js';
+
+    export const ROOM = { width: 14, depth: 10, wallHeight: 5.2 };
+    const W = ROOM.width / 2;
+    const D = ROOM.depth / 2;
+    const EXTEND = 7;                         // 카메라(+x) 쪽으로 바닥·벽·책장을 늘려 방 밖 빈 공간이 안 보이게
+    const DESK_SPACING = DESK.width + 0.05;   // 책상을 옆으로 붙인다
+    const ISLAND_Z = -0.5;                    // 책상 섬의 중심
+    const LAMP_SHADES = ['#6f9a5c', '#e8a33d'];
+    const BACK_SHELF_HEIGHT = 3.0;            // 그 위에 단 벽 조명이 화면 안에 들어오는 높이
+
+    function place(object, [x, y, z], rotY = 0) {
+      object.position.set(x, y, z);
+      object.rotation.y = rotY;
+      return object;
+    }
+
+    function floor() {
+      const length = ROOM.width + EXTEND;
+      const map = woodFloor().clone();
+      map.repeat.set(length / 3.5, 3);
+      map.needsUpdate = true;
+      const top = new THREE.Mesh(new THREE.PlaneGeometry(length, ROOM.depth), new THREE.MeshStandardMaterial({ map, roughness: 0.6 }));
+      top.rotation.x = -Math.PI / 2;
+      top.position.x = EXTEND / 2;
+      top.receiveShadow = true;
+      return top;
+    }
+
+    /**
+     * 창밖 풍경판: 조명 영향을 받지 않는 재질로 하늘 그림을 그대로 보여 준다.
+     * 카메라가 위에서 내려다보므로 지평선(그림의 62% 높이)이 바닥 높이 근처(y≈-0.3)에 오게 낮춰 둔다.
+     */
+    function skyBackdrop(sky) {
+      const height = 26;
+      const horizonY = -0.3;
+      const plane = new THREE.Mesh(
+        new THREE.PlaneGeometry(60, height),
+        new THREE.MeshBasicMaterial({ map: sky.texture, fog: false, toneMapped: false }));
+      return place(plane, [-W - 4, horizonY - height / 2 + height * 0.62, 0], Math.PI / 2);
+    }
+
+    function library() {
+      const h = ROOM.wallHeight;
+      const wallLength = ROOM.width + EXTEND;
+      const shelfLength = wallLength - 1.4;
+      const shelfX = 0.7 + EXTEND / 2;
+      return group(
+        place(windowWall(ROOM.depth, h), [-W, 0, 0], Math.PI / 2),
+        box(wallLength, h, 0.3, '#ece8e1', [EXTEND / 2, h / 2, -D - 0.15]),          // 뒷벽
+        box(wallLength, h, 0.3, '#ece8e1', [EXTEND / 2, h / 2, D + 0.15]),           // 앞벽
+        place(libraryShelf(shelfLength, BACK_SHELF_HEIGHT), [shelfX, 0, -D + 0.25]),
+        place(libraryShelf(shelfLength, 2.2), [shelfX, 0, D - 0.25], Math.PI),
+        place(armchair(), [-W + 1.3, 0, -3.4], -Math.PI / 2),                          // 창을 바라보는 라운지
+        place(sideTable(), [-W + 1.3, 0, -2.6]),
+        place(armchair(), [-W + 1.3, 0, 2.7], -Math.PI / 2),
+        // 창가 화분: 가운데 기둥 양옆과 양 끝 구석
+        ...[[-D + 0.7, 1.2], [-1.1, 0.9], [1.0, 1.3], [2.0, 0.7], [D - 0.8, 1.1], [-1.9, 0.6]]
+          .map(([z, scale]) => place(plant(scale), [-W + 0.55, 0, z])),
+      );
+    }
+
+    /**
+     * 양쪽 책장 위 벽에 일정 간격으로 붙이는 벽 조명. 점광원은 잘 보이는 뒷벽 쪽에만 둔다.
+     * 앞벽은 카메라와 가까워 화면 가장자리에서 크게 잘려 보이므로 창 쪽(먼 구간)에만 둔다.
+     */
+    function wallLights() {
+      const first = -W + 2.4;
+      const last = W + 1;
+      const count = Math.round((last - first) / 3.2) + 1;
+      const xs = Array.from({ length: count }, (_, i) => first + (i * (last - first)) / (count - 1));
+      const back = xs.map((x) => {
+        const s = wallSconce();
+        place(s.object, [x, BACK_SHELF_HEIGHT + 0.4, -D]);
+        return s;
+      });
+      const front = xs.filter((x) => x < 0).map((x) => {
+        const s = wallSconce({ withLight: false });
+        place(s.object, [x, 3.1, D], Math.PI);
+        return s;
+      });
+      return [...back, ...front];
+    }
+
+    /**
+     * 책상 앞면끼리 맞붙인 "책상 섬" 배치. 두 줄이 서로 마주 본다.
+     * 앞쪽 인덱스 줄은 +z를 보고, 나머지 줄은 180° 돌아 -z를 본다.
+     */
+    export function seatLayout(count) {
+      const cols = count / 2;
+      return Array.from({ length: count }, (_, i) => {
+        const facingPlusZ = i < cols;
+        return {
+          x: (i % cols - (cols - 1) / 2) * DESK_SPACING + 0.6,
+          z: ISLAND_Z + (facingPlusZ ? -DESK.far : DESK.far),
+          rotY: facingPlusZ ? 0 : Math.PI,
+        };
+      });
+    }
+
+    /** 빈 자리 표시(바닥의 고리) */
+    function seatMarker() {
+      const ring = new THREE.Mesh(
+        new THREE.RingGeometry(0.38, 0.5, 32),
+        new THREE.MeshBasicMaterial({ color: '#ffcf8a', transparent: true, opacity: 0.7 }));
+      ring.rotation.x = -Math.PI / 2;
+      ring.position.y = 0.02;
+      return ring;
+    }
+
+    function seat({ x, z, rotY }, index, hitMaterial) {
+      const anchor = place(new THREE.Group(), [x, 0, z], rotY);
+      const screen = laptop();
+      screen.object.position.set(0.05, DESK.top, DESK.near + 0.35);
+      // 클릭 판정 상자: 의자 뒤(-0.45) ~ 책상 앞 가장자리 직전까지 (마주 보는 좌석과 겹치지 않게)
+      const hitDepth = DESK.far - 0.05 + 0.45;
+      const hitbox = new THREE.Mesh(new THREE.BoxGeometry(DESK.width - 0.05, 1.6, hitDepth), hitMaterial);
+      hitbox.position.set(0, 0.8, -0.45 + hitDepth / 2);
+      hitbox.userData.seat = index;
+      const lamp = bankerLamp(LAMP_SHADES[index % LAMP_SHADES.length]);
+      lamp.object.position.set(-DESK.width / 2 + 0.35, DESK.top, DESK.far - 0.3);
+      const marker = seatMarker();
+      anchor.add(deskSet(), screen.object, lamp.object, marker, hitbox);
+      return { index, anchor, marker, hitbox, laptop: screen, lamp };
+    }
+
+    export function buildRoom(scene, seatCount) {
+      const sky = createSkyView();
+      const sconces = wallLights();
+      scene.add(floor(), skyBackdrop(sky), library(), ...sconces.map((s) => s.object));
+
+      const hitMaterial = new THREE.MeshBasicMaterial({ visible: false });
+      const seats = seatLayout(seatCount).map((s, i) => seat(s, i, hitMaterial));
+      seats.forEach((s) => scene.add(s.anchor));
+      // lamps: 시간대에 따라 밝기가 바뀌는 조명 (책상 스탠드 + 벽 조명)
+      return { seats, lamps: [...seats.map((s) => s.lamp), ...sconces], sky };
+    }
+  room-view.js: |
+    // 공부방: 내 공부 상태를 정하고 3초마다 하트비트로 서버와 동기화한다.
+    //
+    // 상태 결정 규칙
+    //   자리 없음 / 시작 안 함 → IDLE,  휴식 → BREAK,
+    //   자리 감지 모드에서 얼굴이 안 보임 → AWAY,  그 외 → STUDYING
+    import { post } from './api.js';
+    import { createLofi } from './lofi.js';
+    import { createPlanner } from './planner-view.js';
+    import { createHud } from './room-hud.js';
+    import { createScene } from './scene.js';
+    import { toast } from './ui.js';
+    import { startPresence } from './vision.js';
+
+    const HEARTBEAT_MS = 3000;
+    const KICK_OUT = [401, 403, 404, 409];
+
+    export function mountRoom(root, ctx, roomId) {
+      const state = { seat: null, running: false, onBreak: false, mode: 'manual', present: true, subjectId: null };
+      let me = { totalSec: 0 };
+      let syncedAt = 0;
+      let scene = null;
+      let vision = null;
+      let inflight = false;
+      let pending = false;
+      let closed = false;
+      const lofi = createLofi();
+
+      const status = () => {
+        if (state.seat == null || !state.running) return 'IDLE';
+        if (state.onBreak) return 'BREAK';
+        if (state.mode === 'camera' && !state.present) return 'AWAY';
+        return 'STUDYING';
+      };
+
+      const hud = createHud({
+        leave: () => ctx.go('#/rooms'),
+        start: () => change({ running: true, onBreak: false }),
+        stop: () => change({ running: false, onBreak: false }),
+        toggleBreak: () => change({ onBreak: !state.onBreak }),
+        subject: (id) => change({ subjectId: id }),
+        mode: setMode,
+        music: async () => {
+          lofi.playing ? lofi.pause() : await lofi.play();
+          hud.setMusic(lofi.playing);
+        },
+        volume: (v) => lofi.setVolume(v),
+        copyCode: (code) => navigator.clipboard?.writeText(code).then(() => toast(`방 코드 ${code} 복사됨`)),
+      });
+      root.append(hud.el);
+
+      const planner = createPlanner(hud.plannerBox, {
+        compact: true,
+        onChange: (d) => {
+          if (!d.subjects.some((s) => s.id === state.subjectId)) state.subjectId = null;
+          hud.setSubjects(d.subjects, state.subjectId);
+          beat();   // 책상 위 책 더미(남은 할 일) 갱신
+        },
+      });
+      planner.load();
+
+      function change(patch) {
+        Object.assign(state, patch);
+        hud.renderControls(state, status());
+        beat();
+      }
+
+      async function setMode(mode) {
+        if (mode === state.mode) return;
+        if (mode === 'camera') {
+          hud.setCamera(null, '카메라와 감지 모델을 불러오는 중…');
+          try {
+            vision = await startPresence({
+              onChange: (present) => change({ present }),
+              onSample: (detected) => hud.setDetected(detected),
+            });
+            if (closed) return vision.stop();
+            hud.setCamera(vision.video);
+          } catch (err) {
+            console.warn(err);
+            hud.setCamera(null);
+            toast('카메라를 사용할 수 없어 수동 모드로 계속해요');
+            return;
+          }
+        } else {
+          vision?.stop();
+          vision = null;
+          hud.setCamera(null);
+        }
+        change({ mode, present: true });
+      }
+
+      // ---------- 서버 동기화 ----------
+
+      async function beat() {
+        if (closed) return;
+        if (inflight) {
+          pending = true;
+          return;
+        }
+        inflight = true;
+        try {
+          const subject = planner.data?.subjects.find((s) => s.id === state.subjectId);
+          const res = await post(`/rooms/${roomId}/heartbeat`, {
+            seat: state.seat, status: status(), subjectId: state.subjectId, subjectColor: subject?.color,
+          });
+          if (closed) return;
+          if (res.seatTaken) {
+            state.seat = null;
+            toast('이미 누가 앉은 자리예요');
+          }
+          me = res.me;
+          syncedAt = performance.now();
+          scene ??= createScene(hud.stage, {
+            seatCount: res.room.max,
+            onSeatClick: (seat) => change({ seat }),
+            onDaylight: (d) => hud.setDaylight(d),
+          });
+          scene.update(res.members, ctx.user.id, true);
+          hud.setRoom(res.room);
+          hud.renderMembers(res.members, ctx.user.id);
+          hud.renderControls(state, status());
+          planner.setStudy(res.me);
+        } catch (err) {
+          if (KICK_OUT.includes(err.status)) {
+            toast(err.message);
+            ctx.go('#/rooms');
+          }
+        } finally {
+          inflight = false;
+          if (pending) {
+            pending = false;
+            beat();
+          }
+        }
+      }
+
+      function renderTimer() {
+        const sinceSync = status() === 'STUDYING' && syncedAt ? (performance.now() - syncedAt) / 1000 : 0;
+        hud.renderTimer(me.totalSec + sinceSync);
+      }
+
+      const leaveBeacon = () => navigator.sendBeacon(`/api/rooms/${roomId}/leave`);
+      addEventListener('pagehide', leaveBeacon);
+      hud.renderControls(state, status());
+      beat();
+      const timers = [setInterval(beat, HEARTBEAT_MS), setInterval(renderTimer, 1000)];
+
+      return () => {
+        closed = true;
+        timers.forEach(clearInterval);
+        removeEventListener('pagehide', leaveBeacon);
+        post(`/rooms/${roomId}/leave`).catch(() => {});
+        vision?.stop();
+        lofi.close();
+        scene?.destroy();
+      };
+    }
+  room.css: |
+    /* 공부방: 밤 공부방 테마 (어두운 유리 패널 + 따뜻한 크림색 글자) */
+    .room-screen {
+      --glass: rgba(24, 17, 13, 0.72);
+      --glass-line: rgba(255, 220, 170, 0.14);
+      --cream: #f6e7cf;
+      --cream-dim: #bda98e;
+      --amber: #f0a64a;
+      position: fixed; inset: 0; overflow: hidden;
+      background: #120d0a;
+      color: var(--cream);
+    }
+    .room-screen small { color: var(--cream-dim); }
+    .room-screen .card {
+      background: var(--glass);
+      border: 1px solid var(--glass-line);
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+      backdrop-filter: blur(8px);
+    }
+    .room-screen .btn { background: rgba(255, 230, 190, 0.12); color: var(--cream); box-shadow: none; border: 1px solid var(--glass-line); }
+    .room-screen .btn.primary { background: var(--amber); color: #2a1a0e; border-color: var(--amber); }
+    .room-screen .btn.ghost { background: transparent; }
+    .room-screen .seg { background: transparent; border: 1px solid var(--glass-line); color: var(--cream); }
+    .room-screen .seg.on { background: var(--amber); border-color: var(--amber); color: #2a1a0e; }
+    .room-screen input, .room-screen select { background: rgba(255, 240, 220, 0.08); border: 1px solid var(--glass-line); color: var(--cream); }
+    .room-screen option, .room-screen optgroup { color: #2a1a0e; }
+    .room-screen .badge, .room-screen .chip { background: rgba(255, 230, 190, 0.14); color: var(--cream); }
+    .room-screen .badge.private { background: rgba(240, 166, 74, 0.25); }
+
+    .stage { position: absolute; inset: 0; }
+    .stage canvas { display: block; }
+    .label-layer { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
+    .name-tag {
+      position: absolute; left: 0; top: 0; white-space: nowrap;
+      padding: 2px 10px; border-radius: 999px;
+      background: rgba(20, 14, 10, 0.72); border: 1px solid var(--glass-line);
+      font: 12px var(--font-title); color: var(--cream);
+    }
+    .name-tag.me { border: 2px solid var(--amber); }
+    .name-tag { display: flex; flex-direction: column; align-items: center; line-height: 1.25; }
+    .name-tag .plan {
+      display: flex; align-items: center; gap: 4px; max-width: 180px; overflow: hidden; text-overflow: ellipsis;
+      font: 11px var(--font-body); color: var(--cream);
+    }
+    .name-tag .plan .dot { width: 7px; height: 7px; }
+    .name-tag.AWAY { color: #ffb4a0; }
+
+    .room-top {
+      position: absolute; top: 12px; left: 16px; right: 16px;
+      display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap;
+      pointer-events: none;
+    }
+    .room-top > * { pointer-events: auto; }
+    .room-title { display: flex; align-items: center; gap: 10px; font-family: var(--font-title); font-size: 1.3rem; text-shadow: 0 2px 8px #000; }
+
+    .panel { position: absolute; top: 64px; width: 290px; max-height: calc(100% - 300px); overflow: auto; padding: 14px; }
+    .panel.left { left: 16px; }
+    .panel.right { right: 16px; }
+    .panel.hidden { display: none; }
+    .room-screen .task { background: rgba(255, 240, 220, 0.06); }
+    .room-screen .progress .bar { background: rgba(255, 240, 220, 0.12); }
+    .room-screen .subject-times { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+    .room-screen .subject-times .chip { font: 0.75rem var(--font-body); padding: 2px 8px; }
+    .room-screen .progress .bar span { background: linear-gradient(90deg, #d9883a, var(--amber)); }
+
+    .members { list-style: none; margin: 10px 0 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+    .members li { display: flex; align-items: center; gap: 10px; }
+    .members li.me strong { color: var(--amber); }
+    .members li div { flex: 1; display: flex; flex-direction: column; }
+    .avatar { width: 36px; height: 36px; border-radius: 50%; background: var(--c); display: grid; place-items: center; font-size: 1.2rem; }
+    .dot-status { width: 10px; height: 10px; border-radius: 50%; background: #6d6157; }
+    .dot-status.STUDYING { background: #8fd16a; box-shadow: 0 0 8px #8fd16a; }
+    .dot-status.AWAY { background: #ff7b5c; }
+    .dot-status.BREAK { background: #f0c75e; }
+
+    /* 왼쪽 아래 큰 타이머 */
+    .session { position: absolute; left: 28px; bottom: 22px; pointer-events: none; text-shadow: 0 2px 12px rgba(0, 0, 0, 0.7); }
+    .session-label { display: flex; align-items: center; gap: 8px; font-size: 1.05rem; letter-spacing: 2px; opacity: 0.9; }
+    .timer { font-family: var(--font-title); font-size: 4.2rem; line-height: 1; letter-spacing: 2px; font-variant-numeric: tabular-nums; color: #fff8ec; }
+    .status-pill { font-family: var(--font-title); font-size: 0.8rem; letter-spacing: 0; padding: 2px 10px; border-radius: 999px; background: rgba(255, 240, 220, 0.14); }
+    .status-pill.STUDYING { background: rgba(143, 209, 106, 0.25); color: #c9f0ad; }
+    .status-pill.AWAY { background: rgba(255, 123, 92, 0.25); color: #ffc2b0; }
+    .status-pill.BREAK { background: rgba(240, 199, 94, 0.25); color: #ffe39a; }
+
+    .dock {
+      position: absolute; right: 16px; bottom: 16px;
+      display: flex; align-items: center; gap: 16px; padding: 12px 16px; max-width: calc(100% - 380px);
+      flex-wrap: wrap; justify-content: flex-end;
+    }
+    .dock-subject { display: flex; flex-direction: column; gap: 2px; min-width: 150px; }
+    .controls { display: flex; flex-direction: column; gap: 6px; align-items: center; }
+    .controls .mode .seg { padding: 3px 10px; font-size: 0.85rem; }
+    .camera { position: relative; display: flex; align-items: center; }
+    .camera video { width: 112px; height: 84px; object-fit: cover; border-radius: 12px; transform: scaleX(-1); border: 2px solid var(--glass-line); }
+    .camera .led { position: absolute; top: 6px; right: 6px; width: 12px; height: 12px; border-radius: 50%; background: #6d6157; border: 2px solid #fff; }
+    .camera.detected .led { background: #4caf50; }
+    .camera.detected video { border-color: #8fd16a; }
+
+    @media (max-width: 860px) {
+      .room-screen { overflow: auto; display: flex; flex-direction: column; }
+      .room-screen > * { flex: none; }
+      .room-top { order: -1; position: static; padding: 12px 16px 0; }
+      .stage { position: relative; height: 46vh; }
+      .session { position: absolute; top: calc(46vh + 20px); left: 24px; bottom: auto; }
+      .timer { font-size: 2.6rem; }
+      .name-tag { font-size: 10px; padding: 1px 7px; }
+      .panel { position: static; width: auto; max-height: none; margin: 8px 16px; }
+      .dock { position: static; margin: 8px 16px 16px; max-width: none; justify-content: center; }
+    }
+  rooms-view.js: |
+    // 공부방 페이지: 방 목록 · 방 만들기(모달) · 비공개방 코드 입장
+    import { get, post } from './api.js';
+    import { mountShell } from './shell.js';
+    import { h, toast } from './ui.js';
+
+    const REFRESH_MS = 5000;
+
+    export function mountRooms(root, ctx) {
+      const shell = mountShell(root, ctx, 'rooms');
+      const grid = h('div', { class: 'room-grid' });
+      const dialog = createRoomDialog(ctx);
+      const count = h('span', { class: 'room-count' }, '불러오는 중');
+      const live = h('span', { class: 'live-note', role: 'status' }, '공부방을 확인하고 있어요');
+      let closed = false;
+      let lastRooms = null;
+      const date = new Intl.DateTimeFormat('ko-KR', {
+        timeZone: 'Asia/Seoul', month: 'long', day: 'numeric', weekday: 'long',
+      }).format(new Date());
+
+      shell.main.append(
+        h('div', { class: 'page-head' },
+          h('div', {}, h('span', { class: 'eyebrow' }, date), h('h1', {}, '공부방'),
+            h('p', {}, '마음에 드는 방에 자리를 잡고, 오늘의 공부를 시작하세요.')),
+          h('button', { class: 'btn primary', onClick: () => dialog.open() }, '＋ 방 만들기')),
+        h('div', { class: 'rooms-toolbar' },
+          h('div', { class: 'rooms-heading' }, h('h2', {}, '열린 공부방'), count),
+          h('div', { class: 'page-actions' },
+            h('form', { class: 'code-join', onSubmit: joinByCode },
+              h('label', { htmlFor: 'room-code' }, '초대받으셨나요?'),
+              h('input', { id: 'room-code', name: 'code', class: 'code-input', placeholder: '6자리 코드', maxLength: 6,
+                minLength: 6, pattern: '[A-Z0-9]{6}', required: true,
+                autocomplete: 'off', 'aria-label': '비공개방 코드', onInput: (e) => { e.target.value = e.target.value.toUpperCase(); } }),
+              h('button', { class: 'btn', type: 'submit' }, '코드로 입장')))),
+        grid,
+        h('div', { class: 'rooms-note' }, live, h('span', {}, '공개방은 누구나 · 비공개방은 초대 코드로')),
+        dialog.element);
+
+      async function loadRooms() {
+        try {
+          const { rooms } = await get('/rooms');
+          if (closed) return;
+          count.textContent = String(rooms.length);
+          live.textContent = '실시간으로 업데이트 중';
+          live.classList.remove('offline');
+          // 내용이 같으면 버튼을 다시 만들지 않아 키보드 포커스를 유지한다.
+          const signature = JSON.stringify(rooms);
+          if (signature !== lastRooms) {
+            grid.replaceChildren(...(rooms.length ? rooms.map(roomCard) : [emptyState()]));
+            lastRooms = signature;
+          }
+        } catch (err) {
+          if (closed) return;
+          if (err.status === 401) ctx.logout();
+          live.textContent = '연결을 확인해 주세요 · 5초 후 다시 시도해요';
+          live.classList.add('offline');
+          if (!grid.childElementCount) {
+            count.textContent = '—';
+            grid.replaceChildren(h('div', { class: 'empty-state' },
+              h('h3', {}, '공부방을 불러오지 못했어요'),
+              h('p', {}, '잠시 후 다시 시도하거나 연결 상태를 확인해 주세요.'),
+              h('button', { class: 'btn', onClick: loadRooms }, '다시 불러오기')));
+          }
+        }
+      }
+
+      const roomCard = (r, index) => h('article', { class: `card room-card${r.count >= r.max ? ' full' : ''}` },
+        h('div', { class: 'room-card-top' },
+          h('span', { class: 'room-number', 'aria-hidden': 'true' }, String(index + 1).padStart(2, '0')),
+          h('span', { class: `badge${r.private ? ' private' : ''}` }, r.private ? '비공개' : '공개방')),
+        h('h3', {}, r.name),
+        h('div', { class: 'room-occupancy' },
+          h('div', { class: 'seats', 'aria-label': `${r.max}자리 중 ${r.count}명 참여 중` },
+            Array.from({ length: r.max }, (_, i) => h('i', { class: i < r.count ? 'filled' : '', 'aria-hidden': 'true' }))),
+          h('span', { class: 'seat-count' }, h('strong', {}, String(r.count)), ` / ${r.max}`)),
+        h('div', { class: 'room-card-foot' },
+          h('small', {}, r.count >= r.max ? '모든 자리가 찼어요' : r.count ? `${r.max - r.count}자리 남아 있어요` : '첫 번째로 자리를 잡아보세요'),
+          h('button', { class: 'btn small', disabled: r.count >= r.max, 'aria-label': `${r.name} 입장`,
+            onClick: () => ctx.go(`#/room/${r.id}`) }, r.count >= r.max ? '입장 마감' : '입장하기 ↗')));
+
+      const emptyState = () => h('div', { class: 'card empty-state' },
+        h('span', { class: 'empty-book', 'aria-hidden': 'true' }),
+        h('h3', {}, '아직 열린 방이 없어요'),
+        h('p', {}, '첫 방을 만들고 친구를 초대해 보세요.'),
+        h('button', { class: 'btn primary', onClick: () => dialog.open() }, '＋ 방 만들기'));
+
+      async function joinByCode(e) {
+        e.preventDefault();
+        const button = e.target.querySelector('[type="submit"]');
+        button.disabled = true;
+        try {
+          const { roomId } = await post('/rooms/join-code', { code: new FormData(e.target).get('code') });
+          ctx.go(`#/room/${roomId}`);
+        } catch (err) {
+          toast(err.message);
+        } finally {
+          button.disabled = false;
+        }
+      }
+
+      loadRooms();
+      const timer = setInterval(loadRooms, REFRESH_MS);
+      return () => {
+        closed = true;
+        clearInterval(timer);
+        shell.destroy();
+      };
+    }
+
+    /** 방 만들기 모달 (<dialog> — Esc로 닫힘) */
+    function createRoomDialog(ctx) {
+      const options = { max: 6, private: false };
+      const element = h('dialog', { class: 'card room-dialog', 'aria-labelledby': 'room-dialog-title' });
+
+      function draw() {
+        const seg = (label, on, onClick) => h('button', {
+          type: 'button', class: `seg${on ? ' on' : ''}`, 'aria-pressed': String(on), onClick,
+        }, label);
+        const name = element.querySelector('input')?.value ?? '';
+        element.replaceChildren(h('form', { class: 'stack', onSubmit: create },
+          h('h2', { id: 'room-dialog-title' }, '새 공부방'),
+          h('p', { class: 'dialog-description' }, '방 이름과 자리를 정하고 공부를 시작하세요.'),
+          h('label', { class: 'field' }, h('span', {}, '방 이름'),
+            h('input', { name: 'name', placeholder: '예: 새벽 도서관', maxLength: 20, required: true, value: name })),
+          h('div', { class: 'field' }, h('span', {}, '자리 수'),
+            h('div', { class: 'row' }, [4, 6, 8].map((n) => seg(`${n}명`, options.max === n, () => { options.max = n; draw(); })))),
+          h('div', { class: 'field' }, h('span', {}, '공개 범위'),
+            h('div', { class: 'row' },
+              seg('공개방', !options.private, () => { options.private = false; draw(); }),
+              seg('비공개방', options.private, () => { options.private = true; draw(); })),
+            h('small', {}, options.private ? '영문+숫자 6자리 입장 코드가 만들어져요' : '누구나 목록에서 보고 들어올 수 있어요')),
+          h('div', { class: 'row end' },
+            h('button', { type: 'button', class: 'btn ghost', onClick: () => element.close() }, '취소'),
+            h('button', { type: 'submit', class: 'btn primary' }, '만들고 입장'))));
+      }
+
+      async function create(e) {
+        e.preventDefault();
+        const button = e.target.querySelector('[type="submit"]');
+        button.disabled = true;
+        try {
+          const { room } = await post('/rooms', { ...options, name: new FormData(e.target).get('name') });
+          element.close();
+          ctx.go(`#/room/${room.id}`);
+        } catch (err) {
+          toast(err.message);
+        } finally {
+          button.disabled = false;
+        }
+      }
+
+      draw();
+      return {
+        element,
+        open() {
+          draw();
+          element.showModal();
+          element.querySelector('input').focus();
+        },
+      };
+    }
+  scene.js: |
+    // Three.js 장면: 렌더러·카메라·조명·블룸, 좌석 클릭, 멤버 상태 → 캐릭터 반영
+    import * as THREE from 'three';
+    import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+    import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+    import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+    import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+    import { characterKey, createCharacter } from './characters.js';
+    import { currentHours, daylightAt } from './daylight.js';
+    import { ROOM, buildRoom } from './room-model.js';
+
+    const DAYLIGHT_REFRESH_MS = 60_000;
+    // 마주 보는 두 줄의 얼굴이 모두 보이도록 책상 섬의 옆(+x)쪽에서 창을 향해 비스듬히 내려다본다
+    // (정측면이면 같은 줄 캐릭터가 일렬로 겹치므로 약 72°)
+    const CAMERA_TARGET = new THREE.Vector3(0.1, 1.25, -0.5);
+    const CAMERA_POS = CAMERA_TARGET.clone().add(new THREE.Vector3(10.6, 5.3, 3.4));
+    const BACKGROUND = { night: new THREE.Color('#1e1a17'), day: new THREE.Color('#c9c0b2') };
+
+    function webglAvailable() {
+      try {
+        return !!document.createElement('canvas').getContext('webgl2');
+      } catch {
+        return false;
+      }
+    }
+
+    /** 창으로 들어오는 햇빛(밤에는 달빛) + 하늘빛 주변광. 세기와 색은 applyDaylight가 시각에 맞춰 바꾼다. */
+    function lights(scene) {
+      const ambient = new THREE.HemisphereLight('#ffffff', '#8a7458', 1);
+      const sun = new THREE.DirectionalLight('#ffffff', 1);
+      sun.castShadow = true;
+      sun.shadow.mapSize.set(2048, 2048);
+      Object.assign(sun.shadow.camera, { left: -11, right: 11, top: 11, bottom: -11, near: 1, far: 50 });
+      sun.shadow.bias = -0.0005;
+      scene.add(ambient, sun);
+      return { ambient, sun };
+    }
+
+    function createRenderer(container) {
+      const renderer = new THREE.WebGLRenderer({ antialias: true });
+      renderer.setPixelRatio(Math.min(devicePixelRatio, 1.75));
+      renderer.shadowMap.enabled = true;
+      renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+      renderer.toneMapping = THREE.ACESFilmicToneMapping;
+      container.append(renderer.domElement);
+      return renderer;
+    }
+
+    export function createScene(container, { seatCount, onSeatClick, onDaylight }) {
+      if (!webglAvailable()) {
+        container.append(Object.assign(document.createElement('p'), {
+          className: 'empty', textContent: '이 브라우저는 WebGL을 지원하지 않아 3D 공부방을 표시할 수 없어요.',
+        }));
+        return { update() {}, destroy() {} };
+      }
+
+      const renderer = createRenderer(container);
+      const labels = Object.assign(document.createElement('div'), { className: 'label-layer' });
+      container.append(labels);
+
+      const scene = new THREE.Scene();
+      const camera = new THREE.PerspectiveCamera(30, 1, 0.1, 100);
+      const light = lights(scene);
+      const room = buildRoom(scene, seatCount);
+
+      /** 현재 시각의 하늘·빛을 장면에 적용한다 (1분마다) */
+      function applyDaylight() {
+        const d = daylightAt(currentHours());
+        room.sky.draw(d);
+        // 창(-x) 바깥에서 들어오는 빛: 고도가 높을수록 위에서, 시간이 흐르면 z 방향으로 이동
+        light.sun.position.set(-ROOM.width / 2 - 8, 2 + d.elevation * 14, (d.progress - 0.5) * 16);
+        light.sun.color.copy(d.sunColor);
+        light.sun.intensity = d.sunIntensity;
+        light.ambient.color.copy(d.skyTop).lerp(new THREE.Color('#ffffff'), 0.55);
+        light.ambient.intensity = d.ambient;
+        room.lamps.forEach((lamp) => lamp.setLevel(d.lamp));
+        scene.background = BACKGROUND.night.clone().lerp(BACKGROUND.day, Math.min(1, d.sunIntensity / 2.8));
+        onDaylight?.(d);
+      }
+      applyDaylight();
+      const daylightTimer = setInterval(applyDaylight, DAYLIGHT_REFRESH_MS);
+      const characters = new Map();            // seat → character
+      let pickable = true;
+
+      // 빛나는 물체(스탠드 갓·노트북 화면)만 번지게 하는 블룸
+      const composer = new EffectComposer(renderer);
+      const bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.5, 0.6, 0.9);
+      composer.addPass(new RenderPass(scene, camera));
+      composer.addPass(bloom);
+      composer.addPass(new OutputPass());
+
+      function resize() {
+        const { clientWidth: w, clientHeight: h } = container;
+        camera.aspect = w / h || 1;
+        // 세로로 좁은 화면에서는 카메라를 뒤로 물려 방 전체가 보이게
+        const distance = Math.max(1, 1.55 / camera.aspect);
+        camera.position.copy(CAMERA_TARGET).addScaledVector(CAMERA_POS.clone().sub(CAMERA_TARGET), distance);
+        camera.lookAt(CAMERA_TARGET);
+        camera.updateProjectionMatrix();
+        renderer.setSize(w, h);
+        composer.setSize(w, h);
+      }
+      const observer = new ResizeObserver(resize);
+      observer.observe(container);
+
+      // ---------- 좌석 클릭 ----------
+      const raycaster = new THREE.Raycaster();
+      const pointer = new THREE.Vector2();
+      function seatAt(e) {
+        const rect = renderer.domElement.getBoundingClientRect();
+        pointer.set(((e.clientX - rect.left) / rect.width) * 2 - 1, -((e.clientY - rect.top) / rect.height) * 2 + 1);
+        raycaster.setFromCamera(pointer, camera);
+        if (!pickable) return null;
+        // 앞에 앉은 사람의 좌석에 가려져도 그 뒤의 빈 좌석을 고를 수 있게, 가까운 순서로 빈 자리를 찾는다
+        const hits = raycaster.intersectObjects(room.seats.map((s) => s.hitbox));
+        return hits.map((hit) => hit.object.userData.seat).find((seat) => !characters.has(seat)) ?? null;
+      }
+      const onMove = (e) => { renderer.domElement.style.cursor = seatAt(e) != null ? 'pointer' : ''; };
+      const onClick = (e) => {
+        const seat = seatAt(e);
+        if (seat != null) onSeatClick(seat);
+      };
+      renderer.domElement.addEventListener('pointermove', onMove);
+      renderer.domElement.addEventListener('click', onClick);
+
+      // ---------- 렌더 루프 ----------
+      const projected = new THREE.Vector3();
+      function placeLabels() {
+        const { clientWidth: w, clientHeight: h } = container;
+        for (const c of characters.values()) {
+          projected.setFromMatrixPosition(c.labelAnchor.matrixWorld).project(camera);
+          c.label.style.transform = `translate(${((projected.x + 1) / 2) * w}px, ${((1 - projected.y) / 2) * h}px) translate(-50%, -100%)`;
+        }
+      }
+
+      const clock = new THREE.Clock();
+      renderer.setAnimationLoop(() => {
+        const dt = clock.getDelta();
+        const t = clock.elapsedTime;
+        for (const s of room.seats) {
+          s.marker.visible = pickable && !characters.has(s.index);
+          s.marker.material.opacity = 0.45 + Math.sin(t * 3) * 0.25;
+          s.laptop.setOn(characters.get(s.index)?.status === 'STUDYING');
+        }
+        for (const c of characters.values()) c.tick(t, dt);
+        composer.render();
+        placeLabels();
+      });
+
+      function removeCharacter(seat) {
+        const c = characters.get(seat);
+        room.seats[seat].anchor.remove(c.root);
+        c.dispose();
+        characters.delete(seat);
+      }
+
+      return {
+        /** members: 하트비트 응답의 멤버 목록. 좌석에 앉은 사람만 캐릭터로 그린다. */
+        update(members, myId, canPick) {
+          pickable = canPick;
+          const bySeat = new Map(members.filter((m) => m.seat != null).map((m) => [m.seat, m]));
+          for (const seat of [...characters.keys()]) {
+            const m = bySeat.get(seat);
+            if (!m || characters.get(seat).key !== characterKey(m)) removeCharacter(seat);
+          }
+          for (const [seat, m] of bySeat) {
+            if (!characters.has(seat)) {
+              const c = createCharacter(m);
+              characters.set(seat, c);
+              room.seats[seat].anchor.add(c.root);
+              labels.append(c.label);
+            }
+            characters.get(seat).update(m, m.id === myId);
+          }
+        },
+        destroy() {
+          clearInterval(daylightTimer);
+          renderer.setAnimationLoop(null);
+          observer.disconnect();
+          for (const seat of [...characters.keys()]) removeCharacter(seat);
+          scene.traverse((o) => o.geometry?.dispose());
+          composer.dispose();
+          renderer.dispose();
+          renderer.domElement.remove();
+          labels.remove();
+        },
+      };
+    }
+  shell.js: |
+    // 공부방·플래너·캐릭터 페이지가 함께 쓰는 상단 바: 로고 · 페이지 탭 · 오늘 공부시간 · 프로필 메뉴
+    import { get } from './api.js';
+    import { characterOf, fill, fmtShort, h } from './ui.js';
+
+    const PAGES = [['rooms', '공부방'], ['planner', '플래너'], ['character', '캐릭터']];
+
+    export function mountShell(root, ctx, active) {
+      const todayChip = h('span', { class: 'chip today-chip' }, '오늘 0분');
+      const profileBox = h('div', { class: 'profile' });
+      const main = h('main', { class: `page page-${active}` });
+      let menuOpen = false;
+
+      root.append(
+        h('header', { class: 'app-header' },
+          h('a', { class: 'logo small', href: '#/rooms', 'aria-label': 'StudyPals 공부방' },
+            h('span', { class: 'brand-mark', 'aria-hidden': 'true' }, 's'), 'StudyPals'),
+          h('nav', { class: 'nav-tabs', 'aria-label': '주 메뉴' },
+            PAGES.map(([page, label]) => h('a', { class: `nav-tab${page === active ? ' on' : ''}`, href: `#/${page}`,
+              'aria-current': page === active ? 'page' : null }, label))),
+          h('div', { class: 'header-right' }, todayChip, profileBox)),
+        main);
+
+      // ---------- 프로필 메뉴 ----------
+
+      function drawProfile() {
+        const me = characterOf(ctx.user.character);
+        fill(profileBox,
+          h('button', { class: 'profile-btn', 'aria-expanded': String(menuOpen), onClick: toggleMenu },
+            h('span', { class: 'avatar', style: `--c:${me.color}` }, me.emoji),
+            h('strong', {}, ctx.user.name), h('span', { class: 'caret' }, '▾')),
+          menuOpen && h('div', { class: 'popover card' },
+            h('div', { class: 'row' }, h('span', { class: 'avatar big', style: `--c:${me.color}` }, me.emoji),
+              h('div', {}, h('strong', {}, ctx.user.name), h('br'), h('small', {}, `@${ctx.user.username} · ${me.label}`))),
+            h('a', { class: 'btn small', href: '#/character' }, '캐릭터 바꾸기'),
+            h('button', { class: 'btn ghost small', onClick: ctx.logout }, '로그아웃')));
+      }
+
+      function toggleMenu(e) {
+        e.stopPropagation();
+        menuOpen = !menuOpen;
+        drawProfile();
+      }
+
+      const closeMenu = (e) => {
+        if (menuOpen && !profileBox.contains(e.target)) {
+          menuOpen = false;
+          drawProfile();
+        }
+      };
+      document.addEventListener('click', closeMenu);
+
+      drawProfile();
+      get('/me').then(({ today }) => { todayChip.textContent = `오늘 ${fmtShort(today.totalSec)}`; }).catch(() => {});
+
+      return {
+        main,
+        setToday(sec) { todayChip.textContent = `오늘 ${fmtShort(sec)}`; },
+        /** 캐릭터를 바꾼 뒤 상단 아바타를 다시 그린다 */
+        refreshProfile: drawProfile,
+        destroy() { document.removeEventListener('click', closeMenu); },
+      };
+    }
+  textures.js: |
+    // 캔버스로 그리는 텍스처 — 이미지 파일 없이 코드로만 만든다 (ConfigMap 용량 절약)
+    import * as THREE from 'three';
+
+    const cache = new Map();
+    const rand = (a, b) => a + Math.random() * (b - a);
+
+    function makeCanvas(w, h) {
+      const canvas = document.createElement('canvas');
+      canvas.width = w;
+      canvas.height = h;
+      return canvas;
+    }
+
+    function toTexture(canvas, repeat = [1, 1]) {
+      const texture = new THREE.CanvasTexture(canvas);
+      texture.colorSpace = THREE.SRGBColorSpace;
+      texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
+      texture.repeat.set(...repeat);
+      texture.anisotropy = 4;
+      return texture;
+    }
+
+    function cached(key, size, draw, repeat) {
+      if (!cache.has(key)) {
+        const canvas = makeCanvas(...size);
+        draw(canvas.getContext('2d'), ...size);
+        cache.set(key, toTexture(canvas, repeat));
+      }
+      return cache.get(key);
+    }
+
+    /** 밝은 원목 마루 */
+    export const woodFloor = () => cached('wood', [512, 512], (ctx, w, h) => {
+      const planks = 8;
+      const pw = w / planks;
+      for (let i = 0; i < planks; i++) {
+        ctx.fillStyle = `hsl(33, ${rand(30, 38)}%, ${rand(62, 70)}%)`;
+        ctx.fillRect(i * pw, 0, pw, h);
+        ctx.strokeStyle = 'rgba(120,80,40,0.10)';
+        for (let g = 0; g < 6; g++) {                  // 나뭇결
+          ctx.beginPath();
+          const x = i * pw + rand(4, pw - 4);
+          ctx.moveTo(x, 0);
+          ctx.bezierCurveTo(x + rand(-6, 6), h / 3, x + rand(-6, 6), (h * 2) / 3, x, h);
+          ctx.stroke();
+        }
+        ctx.fillStyle = 'rgba(90,60,30,0.35)';
+        ctx.fillRect(i * pw, 0, 2, h);
+        ctx.fillRect(i * pw, rand(0, h), pw, 2);
+      }
+    }, [3, 3]);
+
+    /** 노트북 화면: 코드 에디터처럼 보이는 색 줄 */
+    export const codeScreen = () => cached('screen', [256, 160], (ctx, w, h) => {
+      ctx.fillStyle = '#1e2433';
+      ctx.fillRect(0, 0, w, h);
+      ctx.fillStyle = '#2a3245';
+      ctx.fillRect(0, 0, 40, h);
+      const colors = ['#7aa2f7', '#9ece6a', '#e0af68', '#bb9af7', '#7dcfff', '#f7768e'];
+      for (let y = 10; y < h - 8; y += 11) {
+        let x = 48 + Math.floor(rand(0, 3)) * 12;
+        for (let p = Math.floor(rand(1, 4)); p > 0; p--) {
+          const len = rand(18, 60);
+          ctx.fillStyle = colors[Math.floor(rand(0, colors.length))];
+          ctx.fillRect(x, y, len, 5);
+          x += len + 6;
+        }
+      }
+    });
+
+    /**
+     * 창밖 풍경: 하늘 그라데이션 + 해/달 + 별 + 숲 실루엣.
+     * draw(daylight)를 호출하면 같은 캔버스에 다시 그린다.
+     */
+    export function createSkyView() {
+      const W = 1024;
+      const H = 512;
+      const HORIZON = H * 0.62;
+      const canvas = makeCanvas(W, H);
+      const ctx = canvas.getContext('2d');
+      const texture = toTexture(canvas);
+      const stars = Array.from({ length: 90 }, () => [rand(0, W), rand(0, HORIZON * 0.9), rand(0.6, 1.8)]);
+      // 나무는 지평선 근처에만 두 겹(먼 숲은 작고 흐리게, 가까운 숲은 크고 진하게) — 하늘이 충분히 보이도록
+      const forest = (count, minR, maxR, offset) =>
+        Array.from({ length: count }, (_, i) => [i * (W / (count - 4)) + rand(-12, 12), HORIZON + offset + rand(0, 10), rand(minR, maxR)]);
+      const farTrees = forest(70, 10, 20, -4);
+      const nearTrees = forest(46, 18, 32, 14);
+
+      function drawBody(d) {
+        const x = W * (0.1 + d.progress * 0.8);
+        const y = HORIZON - d.elevation * HORIZON * 0.75;
+        const sun = d.body === 'sun';
+        const r = sun ? 34 : 24;
+        const halo = ctx.createRadialGradient(x, y, r * 0.5, x, y, r * (sun ? 5 : 3));
+        halo.addColorStop(0, sun ? 'rgba(255,240,200,0.65)' : 'rgba(220,230,255,0.35)');
+        halo.addColorStop(1, 'rgba(255,240,200,0)');
+        ctx.fillStyle = halo;
+        ctx.fillRect(0, 0, W, H);
+        ctx.fillStyle = sun ? `#${d.sunColor.clone().lerp(new THREE.Color('#ffffff'), 0.5).getHexString()}` : '#eef1ff';
+        ctx.beginPath();
+        ctx.arc(x, y, r, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      function drawLayer(trees, base, highlight) {
+        for (const [x, y, r] of trees) {
+          ctx.fillStyle = `#${base.getHexString()}`;
+          ctx.beginPath();
+          ctx.arc(x, y, r, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.fillStyle = `#${highlight.getHexString()}`;
+          ctx.beginPath();
+          ctx.arc(x - r * 0.3, y - r * 0.25, r * 0.45, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+
+      function drawTrees(d) {
+        // 낮에는 초록, 밤에는 어두운 실루엣. 먼 숲은 하늘색이 섞여 흐리게 보인다.
+        const light = Math.min(1, d.sunIntensity / 2.6);
+        const near = new THREE.Color('#0d1712').lerp(new THREE.Color('#4d7d43'), light);
+        const far = near.clone().lerp(d.horizon, 0.35);
+        const shine = (c) => c.clone().lerp(new THREE.Color('#9cc77c'), 0.35 * light);
+        drawLayer(farTrees, far, shine(far));
+        ctx.fillStyle = `#${near.getHexString()}`;
+        ctx.fillRect(0, HORIZON + 22, W, H);
+        drawLayer(nearTrees, near, shine(near));
+      }
+
+      return {
+        texture,
+        draw(d) {
+          const sky = ctx.createLinearGradient(0, 0, 0, HORIZON);
+          sky.addColorStop(0, `#${d.skyTop.getHexString()}`);
+          sky.addColorStop(1, `#${d.horizon.getHexString()}`);
+          ctx.fillStyle = sky;
+          ctx.fillRect(0, 0, W, H);
+          ctx.fillStyle = `rgba(255,255,255,${d.stars})`;
+          for (const [x, y, r] of stars) ctx.fillRect(x, y, r, r);
+          drawBody(d);
+          drawTrees(d);
+          texture.needsUpdate = true;
+        },
+      };
+    }
+  timetable.js: |
+    // 플래너 시간표: 6시 ~ 다음 날 5시, 한 줄 = 1시간, 한 칸 = 10분
+    // 계획: 과목(붓)을 고르고 칸을 누르거나 드래그해서 칠한다 (마우스·터치 모두)
+    // 실제: 그 10분 동안 5분 이상 공부했으면 칸 아래에 진한 막대를 그린다
+    import { h } from './ui.js';
+
+    const HOURS = Array.from({ length: 24 }, (_, i) => (i + 6) % 24);
+    const ACTUAL_MIN_SEC = 300;
+    const ERASER = '';
+
+    const slotNow = () => {
+      const now = new Date();
+      return Math.floor((now.getHours() * 60 + now.getMinutes()) / 10);
+    };
+
+    /** @param save(cells) 칠하기를 마칠 때 {칸 번호: subjectId} 전체를 저장 */
+    export function timetable(data, { save }) {
+      const cells = { ...data.day.timetable };
+      const colorOf = (id) => data.subjects.find((s) => s.id === id)?.color;
+      const nowSlot = data.editable ? slotNow() : -1;
+      let brush = data.subjects[0]?.id ?? ERASER;
+      let painting = false;
+      let changed = false;
+
+      function paint(cell) {
+        const id = cells[cell.dataset.slot];
+        cell.classList.toggle('planned', Boolean(id));
+        cell.style.setProperty('--c', colorOf(id) ?? 'transparent');
+      }
+
+      const grid = h('div', { class: `tt-grid${data.editable ? ' editable' : ''}` },
+        HOURS.map((hour) => h('div', { class: 'tt-row' },
+          h('span', { class: 'tt-hour' }, hour),
+          Array.from({ length: 6 }, (_, i) => {
+            const slot = hour * 6 + i;
+            const cell = h('div', { class: `tt-cell${slot === nowSlot ? ' now' : ''}`, 'data-slot': slot },
+              (data.study.bySlot[slot] ?? 0) >= ACTUAL_MIN_SEC && h('i', { class: 'tt-actual' }));
+            paint(cell);
+            return cell;
+          }))));
+
+      // 드래그 중에는 포인터 아래 칸을 찾아 칠한다 (터치는 포인터를 캡처하므로 좌표로 찾는다)
+      function brushAt(e) {
+        const cell = document.elementFromPoint(e.clientX, e.clientY)?.closest('.tt-cell');
+        if (!cell || !grid.contains(cell)) return;
+        const slot = cell.dataset.slot;
+        if ((cells[slot] ?? ERASER) === brush) return;
+        if (brush === ERASER) delete cells[slot];
+        else cells[slot] = brush;
+        changed = true;
+        paint(cell);
+      }
+
+      function finish() {
+        if (painting && changed) save(cells);
+        painting = changed = false;
+      }
+
+      if (data.editable) {
+        grid.addEventListener('pointerdown', (e) => { painting = true; brushAt(e); });
+        grid.addEventListener('pointermove', (e) => painting && brushAt(e));
+        grid.addEventListener('pointerup', finish);
+        grid.addEventListener('pointerleave', finish);
+      }
+
+      const palette = h('div', { class: 'tt-palette' });
+      function drawPalette() {
+        const pick = (id, label, color) => h('button', {
+          type: 'button', class: `tt-brush${brush === id ? ' on' : ''}`, style: `--c:${color}`,
+          onClick: () => { brush = id; drawPalette(); },
+        }, h('i', { class: 'dot' }), label);
+        palette.replaceChildren(
+          ...data.subjects.map((s) => pick(s.id, s.name, s.color)),
+          pick(ERASER, '지우개', '#ffffff'));
+      }
+      if (data.editable && data.subjects.length) drawPalette();
+
+      return h('div', { class: 'timetable' },
+        h('div', { class: 'sheet-label' }, 'TIMETABLE'),
+        data.editable && (data.subjects.length
+          ? h('small', {}, '과목을 고르고 칸을 칠해 시간대별 계획을 세워요')
+          : h('small', {}, '과목을 만들면 시간표를 칠할 수 있어요')),
+        palette,
+        grid,
+        h('small', { class: 'tt-legend' }, h('i', { class: 'tt-actual' }), ' 실제로 공부한 10분'));
+    }
+  ui.js: |
+    // DOM 생성·포맷 유틸과 화면 공용 상수
+
+    /** 고를 수 있는 캐릭터. animal은 3D 모델 종류, color는 털 색 (서버 auth.CHARACTERS와 같은 id) */
+    export const CHARACTERS = {
+      bear: { label: '곰', emoji: '🐻', animal: 'bear', color: '#c69c72' },
+      rabbit: { label: '토끼', emoji: '🐰', animal: 'rabbit', color: '#f5efe4' },
+      'cat-black': { label: '검은 고양이', emoji: '🐈‍⬛', animal: 'cat', color: '#2f2c2e' },
+      'cat-white': { label: '하얀 고양이', emoji: '🐱', animal: 'cat', color: '#f7f4ee' },
+      dog: { label: '갈색 강아지', emoji: '🐶', animal: 'dog', color: '#b7793f' },
+    };
+    export const characterOf = (id) => CHARACTERS[id] ?? CHARACTERS.bear;
+    export const SUBJECT_COLORS = ['#e76f51', '#f4a261', '#e9c46a', '#2a9d8f', '#5b8bd9', '#9b72cf', '#d36c9a', '#6d9f71'];
+    export const STATUS = {
+      STUDYING: { label: '공부 중', emoji: '📖' },
+      AWAY: { label: '자리 비움', emoji: '📱' },
+      BREAK: { label: '휴식 중', emoji: '☕' },
+      IDLE: { label: '대기', emoji: '💤' },
+    };
+
+    /** h('button', { class: 'btn', onClick }, '텍스트') 형태로 요소를 만든다. */
+    export function h(tag, props = {}, ...children) {
+      const el = document.createElement(tag);
+      for (const [key, value] of Object.entries(props)) {
+        if (value == null || value === false) continue;
+        if (key.startsWith('on')) el.addEventListener(key.slice(2).toLowerCase(), value);
+        else if (key === 'class') el.className = value;
+        else if (key === 'style') el.style.cssText = value;
+        else if (key in el) el[key] = value;
+        else el.setAttribute(key, value === true ? '' : value);
+      }
+      el.append(...toNodes(children));
+      return el;
+    }
+
+    /** 조건부 자식(null·false)은 빼고 문자열은 텍스트로 */
+    const toNodes = (children) => children.flat().filter((c) => c != null && c !== false)
+      .map((c) => (c instanceof Node ? c : String(c)));
+
+    /** el.replaceChildren와 같지만 h()처럼 null·false를 걸러 낸다 */
+    export function fill(el, ...children) {
+      el.replaceChildren(...toNodes(children));
+      return el;
+    }
+
+    export function swatches(colors, selected, onPick) {
+      return h('div', { class: 'swatches', role: 'radiogroup' },
+        colors.map((c) => h('button', {
+          type: 'button', class: `swatch${c === selected ? ' on' : ''}`, style: `--c:${c}`,
+          'aria-label': c, onClick: () => onPick(c),
+        })));
+    }
+
+    export const fmtClock = (sec) =>
+      [sec / 3600, (sec % 3600) / 60, sec % 60].map((n) => String(Math.floor(n)).padStart(2, '0')).join(':');
+
+    // 날짜는 서버와 같은 YYYYMMDD 문자열로 주고받는다
+    const parseYmd = (s) => new Date(Number(s.slice(0, 4)), Number(s.slice(4, 6)) - 1, Number(s.slice(6, 8)));
+    const toYmd = (d) => `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`;
+
+    /** "10.29 (목)" */
+    export function fmtDate(ymd) {
+      const d = parseYmd(ymd);
+      return `${d.getMonth() + 1}.${d.getDate()} (${'일월화수목금토'[d.getDay()]})`;
+    }
+
+    export function shiftDate(ymd, days) {
+      const d = parseYmd(ymd);
+      d.setDate(d.getDate() + days);
+      return toYmd(d);
+    }
+
+    export function fmtShort(sec) {
+      const hours = Math.floor(sec / 3600);
+      const mins = Math.floor((sec % 3600) / 60);
+      return hours ? `${hours}시간 ${mins}분` : `${mins}분`;
+    }
+
+    let toastTimer;
+    export function toast(message) {
+      const el = document.getElementById('toast');
+      el.textContent = message;
+      el.classList.add('show');
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => el.classList.remove('show'), 2600);
+    }
+  views.css: |
+    /* 화면별 레이아웃: 로그인 · 상단 바 · 공부방 목록 · 플래너 (3D 공부방은 room.css) */
+
+    /* ---------- 로그인 ---------- */
+    .auth-page {
+      min-height: 100%;
+      display: grid; grid-template-columns: 1fr minmax(320px, 420px); gap: 40px;
+      align-items: center; max-width: 980px; margin: 0 auto; padding: 32px 16px;
+    }
+    .auth-hero p { font-size: 1.2rem; margin: 4px 0 18px; }
+    .hero-animals { font-size: 2.4rem; letter-spacing: 6px; }
+    .hero-points { padding-left: 20px; color: var(--muted); line-height: 2; }
+    .tabs { display: flex; gap: 6px; margin-bottom: 16px; }
+    .tab { flex: 1; padding: 10px; border: 0; border-radius: 12px; background: #f4ead8; font-family: var(--font-title); cursor: pointer; }
+    .tab.on { background: var(--leaf); color: #fff; }
+    .field { display: flex; flex-direction: column; gap: 6px; }
+    .field > span { font-family: var(--font-title); }
+
+    /* ---------- 상단 바 (공부방·플래너 공통) ---------- */
+    .app-header {
+      position: sticky; top: 0; z-index: 10;
+      display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 12px;
+      padding: 12px max(16px, calc((100% - 1160px) / 2));
+      background: rgba(251, 244, 230, 0.88); backdrop-filter: blur(8px);
+      border-bottom: 2px solid var(--line);
+    }
+    .app-header .logo { text-decoration: none; }
+    .nav-tabs { display: flex; gap: 4px; padding: 4px; background: #f1e6d2; border-radius: 999px; }
+    .nav-tab {
+      padding: 8px 18px; border-radius: 999px; text-decoration: none; color: var(--muted);
+      font-family: var(--font-title); white-space: nowrap;
+    }
+    .nav-tab:hover { color: var(--ink); }
+    .nav-tab.on { background: var(--paper); color: var(--ink); box-shadow: 0 2px 0 #dccaa9; }
+    .header-right { display: flex; align-items: center; justify-content: flex-end; gap: 10px; }
+    .today-chip { background: #e7f3df; color: var(--leaf-dark); }
+
+    .profile { position: relative; }
+    .profile-btn {
+      display: flex; align-items: center; gap: 8px; padding: 4px 12px 4px 4px;
+      border: 2px solid var(--line); border-radius: 999px; background: var(--paper); cursor: pointer;
+    }
+    .profile-btn:hover { border-color: var(--leaf); }
+    .caret { color: var(--muted); font-size: 0.8rem; }
+    .avatar { width: 32px; height: 32px; border-radius: 50%; background: var(--c); display: grid; place-items: center; font-size: 1.1rem; flex: none; }
+    .avatar.big { width: 52px; height: 52px; font-size: 1.7rem; }
+    .popover {
+      position: absolute; right: 0; top: calc(100% + 8px); width: 300px; z-index: 20;
+      display: flex; flex-direction: column; gap: 12px;
+    }
+    .char-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+    .char {
+      display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 10px 4px;
+      border: 2px solid var(--line); border-radius: 14px; background: #fff; cursor: pointer;
+    }
+    .char:hover { border-color: var(--leaf); }
+    .char.on { border-color: var(--leaf); background: #eef7e8; }
+    .popover .row { flex-wrap: nowrap; }
+    .popover a.btn { text-align: center; text-decoration: none; color: inherit; }
+
+    /* ---------- 캐릭터 페이지 ---------- */
+    .character-layout { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(280px, 1fr); gap: 20px; align-items: start; }
+    .preview-card { display: flex; flex-direction: column; gap: 14px; }
+    .preview-stage {
+      height: 420px; border-radius: 14px; display: grid; place-items: center; overflow: hidden;
+      background: radial-gradient(circle at 50% 35%, #fffaf0 0, #f4ead8 70%);
+    }
+    .preview-stage canvas { display: block; }
+    .preview-info { display: flex; flex-direction: column; gap: 6px; }
+    .char-grid.big { grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); }
+    .char-grid.big .char { position: relative; padding: 16px 6px; }
+    .char-grid.big .avatar.big { width: 64px; height: 64px; font-size: 2.1rem; }
+    .char .badge { position: absolute; top: 6px; right: 6px; font-size: 0.7rem; padding: 2px 6px; background: var(--leaf); color: #fff; }
+
+    /* ---------- 페이지 공통 ---------- */
+    .page { max-width: 1160px; margin: 0 auto; padding: 28px 16px 48px; display: flex; flex-direction: column; gap: 20px; }
+    .page-head { display: flex; justify-content: space-between; align-items: flex-end; gap: 16px; flex-wrap: wrap; }
+    .page-head h1 { font-size: 2rem; }
+    .page-head p { margin: 4px 0 0; color: var(--muted); }
+    .page-actions { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+    .row.end { justify-content: flex-end; }
+
+    /* ---------- 공부방 목록 ---------- */
+    .code-join { display: flex; gap: 6px; }
+    .code-input { width: 130px; text-transform: uppercase; letter-spacing: 4px; font-family: var(--font-title); text-align: center; }
+    .room-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 16px; }
+    .room-card { display: flex; flex-direction: column; gap: 12px; transition: transform 0.15s, border-color 0.15s; }
+    .room-card:hover { transform: translateY(-3px); border-color: var(--leaf); }
+    .room-card h3 { font-size: 1.25rem; overflow-wrap: anywhere; }
+    .room-card-top { display: flex; justify-content: space-between; align-items: center; }
+    .room-icon { width: 44px; height: 44px; border-radius: 14px; background: #f4ead8; display: grid; place-items: center; font-size: 1.4rem; }
+    .room-card-foot { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-top: auto; }
+    .seats { display: flex; gap: 5px; flex-wrap: wrap; }
+    .seats i { width: 16px; height: 16px; border-radius: 5px; background: #efe4d1; }
+    .seats i.filled { background: var(--leaf); }
+    .empty-state { grid-column: 1 / -1; text-align: center; padding: 40px 16px; display: flex; flex-direction: column; align-items: center; gap: 8px; }
+    .empty-state p { margin: 0 0 8px; color: var(--muted); }
+    .empty-emoji { font-size: 2.6rem; }
+    .room-dialog { width: min(440px, calc(100% - 32px)); padding: 24px; }
+    .room-dialog::backdrop { background: rgba(74, 63, 53, 0.35); backdrop-filter: blur(2px); }
+
+    /* ---------- 플래너 ---------- */
+    .planner-grid { display: grid; grid-template-columns: minmax(0, 1.7fr) minmax(280px, 1fr); gap: 20px; align-items: start; }
+    .planner { display: flex; flex-direction: column; gap: 16px; }
+    .planner-head { display: flex; justify-content: space-between; align-items: baseline; }
+    .today, .subjects { display: flex; flex-direction: column; gap: 8px; }
+    .goal { display: flex; align-items: center; gap: 4px; color: var(--muted); }
+    .goal input { width: 70px; padding: 4px 8px; }
+    .progress .bar { height: 12px; border-radius: 999px; background: #f1e6d2; overflow: hidden; }
+    .subject-times { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+    .progress .bar span { display: block; height: 100%; background: linear-gradient(90deg, var(--leaf), #a7d38e); transition: width 0.4s; }
+    .tasks { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+    .task { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 10px; background: #fff; }
+    .task .title { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+    .task.done .title { text-decoration: line-through; color: var(--muted); }
+    .subject { border: 2px solid var(--line); border-left: 6px solid var(--c); border-radius: 12px; background: #fffaf1; }
+    .subject-head { display: flex; align-items: center; padding: 4px 6px; }
+    .subject-toggle {
+      flex: 1; display: flex; align-items: center; gap: 8px; border: 0; background: none;
+      font-family: var(--font-title); cursor: pointer; text-align: left; padding: 6px;
+    }
+    .subject-toggle small { margin-left: auto; font-family: var(--font-body); }
+    .subject-body { padding: 0 10px 10px; display: flex; flex-direction: column; gap: 8px; }
+    .subject-body form input { flex: 1; width: auto; }
+    .add-subject { display: flex; flex-direction: column; gap: 8px; padding-top: 6px; border-top: 2px dashed var(--line); }
+    .backlog select { flex: 1; width: auto; }
+
+    /* ---------- 좁은 화면 ---------- */
+    @media (max-width: 860px) {
+      .auth-page, .planner-grid, .character-layout { grid-template-columns: 1fr; }
+      .preview-stage { height: 300px; }
+      .auth-page { gap: 16px; }
+      .app-header { grid-template-columns: 1fr auto; }
+      .app-header .nav-tabs { grid-column: 1 / -1; grid-row: 2; justify-self: center; }
+      .today-chip { display: none; }
+      .page-actions, .code-join { width: 100%; }
+      .code-input { flex: 1; }
+    }
+  vision.js: |
+    // 브라우저 안에서 도는 초경량 얼굴 감지 (MediaPipe BlazeFace, 약 230KB)
+    // 카메라 영상은 서버로 보내지 않고, "자리에 있음/없음" 판정만 앱에 알린다.
+
+    const MEDIAPIPE = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14';
+    const MODEL = 'https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/1/blaze_face_short_range.tflite';
+
+    const INTERVAL_MS = 5000;   // 5초마다 한 번 감지
+    const WINDOW = 6;           // 최근 6번의 결과 중
+    const THRESHOLD = 4;        // 4번 이상 같으면 상태를 바꾼다 (순간적인 오탐에 흔들리지 않게)
+
+    /**
+     * @param onChange(present: boolean)  상태가 바뀔 때만 호출
+     * @param onSample(detected: boolean) 매 감지마다 호출 (표시등용)
+     */
+    export async function startPresence({ onChange, onSample }) {
+      const { FilesetResolver, FaceDetector } = await import(`${MEDIAPIPE}/vision_bundle.mjs`);
+      const fileset = await FilesetResolver.forVisionTasks(`${MEDIAPIPE}/wasm`);
+      const detector = await FaceDetector.createFromOptions(fileset, {
+        baseOptions: { modelAssetPath: MODEL, delegate: 'CPU' },
+        runningMode: 'VIDEO',
+        minDetectionConfidence: 0.5,
+      });
+
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 320, height: 240 }, audio: false });
+      const video = Object.assign(document.createElement('video'), { srcObject: stream, muted: true, playsInline: true });
+      await video.play();
+
+      const history = [];
+      let present = true;   // 공부 시작 직후에는 자리에 있다고 본다
+
+      function sample() {
+        if (video.readyState < 2) return;
+        const detected = detector.detectForVideo(video, performance.now()).detections.length > 0;
+        history.push(detected);
+        if (history.length > WINDOW) history.shift();
+        onSample?.(detected);
+
+        const hits = history.filter(Boolean).length;
+        const misses = history.length - hits;
+        const next = hits >= THRESHOLD ? true : misses >= THRESHOLD ? false : present;
+        if (next !== present) {
+          present = next;
+          onChange(present);
+        }
+      }
+
+      sample();
+      const timer = setInterval(sample, INTERVAL_MS);
+
+      return {
+        video,
+        stop() {
+          clearInterval(timer);
+          stream.getTracks().forEach((t) => t.stop());
+          detector.close();
+        },
+      };
+    }
+  workspace.css: |
+    /* 일반 페이지 전용. 3D 공부방(.room-screen)과 렌더러에는 적용하지 않는다. */
+    body:has(.auth-page, .app-header) { background: #f6f5f0; }
+
+    :is(.auth-page, .app-header, .page) {
+      --paper: #fffefa;
+      --ink: #2d3831;
+      --muted: #70766e;
+      --line: #dddfd5;
+      --leaf: #385b47;
+      --leaf-dark: #2c4939;
+      --radius: 6px;
+      --shadow: none;
+      --font-title: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      --font-body: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      --font-hand: var(--font-body);
+      color: var(--ink);
+      font: 14px/1.65 var(--font-body);
+      letter-spacing: -0.025em;
+      -webkit-font-smoothing: antialiased;
+    }
+    :is(.auth-page, .app-header, .page) :is(h1, h2, h3) { font-weight: 650; line-height: 1.4; }
+    :is(.auth-page, .app-header, .page) h2 { font-size: 17px; }
+    :is(.auth-page, .app-header, .page) small { font-size: 12px; }
+    :is(.auth-page, .app-header, .page) .card { border-width: 1px; padding: 24px; }
+    :is(.auth-page, .app-header, .page) :is(button, a, input, select, summary):focus-visible {
+      outline: 2px solid var(--leaf); outline-offset: 4px;
+    }
+    :is(.auth-page, .app-header, .page) :is(input, select) {
+      padding: 10px 12px; min-height: 42px; border-width: 1px; border-radius: 4px; background: #fffefa;
+    }
+    :is(.auth-page, .app-header, .page) input::placeholder { color: #90958b; }
+    :is(.auth-page, .app-header, .page) .btn {
+      padding: 10px 18px; border: 1px solid var(--line); border-radius: 4px;
+      background: var(--paper); font-size: 13px; font-weight: 600; box-shadow: none;
+      transition: background 120ms, border-color 120ms;
+    }
+    :is(.auth-page, .app-header, .page) .btn:hover:enabled { background: #eeefe7; border-color: #a7b2a4; }
+    :is(.auth-page, .app-header, .page) .btn.primary { background: var(--leaf); border-color: var(--leaf); box-shadow: none; }
+    :is(.auth-page, .app-header, .page) .btn.primary:hover:enabled { background: var(--leaf-dark); }
+    :is(.auth-page, .app-header, .page) .btn:active { transform: none; box-shadow: none; }
+    :is(.auth-page, .app-header, .page) .btn.small { padding: 7px 12px; font-size: 12px; }
+    :is(.auth-page, .app-header, .page) .btn.ghost { border-width: 1px; background: transparent; }
+    :is(.auth-page, .app-header, .page) .icon:hover { background: #eeefe7; }
+    :is(.auth-page, .app-header, .page) .badge { background: #edf0e7; color: #52614f; font-size: 11px; padding: 3px 9px; border-radius: 3px; }
+    :is(.auth-page, .app-header, .page) .badge.private { background: #f1e9de; color: #855e37; cursor: default; }
+    :is(.auth-page, .app-header, .page) .seg { padding: 8px 20px; border-width: 1px; border-radius: 4px; font-size: 13px; }
+    :is(.auth-page, .app-header, .page) .seg.on { background: #e9eee5; color: var(--leaf-dark); }
+    :is(.auth-page, .app-header, .page) .field { gap: 8px; }
+    :is(.auth-page, .app-header, .page) .field > span { font-size: 13px; font-weight: 600; }
+    :is(.auth-page, .app-header) .logo {
+      display: inline-flex; align-items: center; gap: 9px; color: var(--ink); text-decoration: none;
+      font: 600 24px Georgia, 'Times New Roman', serif; letter-spacing: -1px;
+    }
+    .brand-mark {
+      display: inline-grid; place-items: center; width: 28px; height: 30px;
+      border-radius: 2px 9px 2px 2px; background: #385b47; color: #fffefa;
+      font: italic 25px Georgia, serif; padding-right: 2px; letter-spacing: -2px;
+    }
+    .eyebrow { display: block; color: #798173; font-size: 12px; font-weight: 500; margin-bottom: 10px; letter-spacing: 0; }
+
+    /* 로그인: 여백과 구분선으로 구성한 도서관 안내 데스크. */
+    .auth-page {
+      grid-template-columns: minmax(0, 1fr) 380px; grid-template-rows: auto 1fr;
+      column-gap: 100px; row-gap: 72px; max-width: 1096px; min-height: 100svh;
+      padding: 40px 32px 80px; align-content: start;
+    }
+    .auth-brand { grid-column: 1 / -1; justify-self: start; }
+    .auth-hero { padding-bottom: 16px; }
+    .auth-hero h1 { font-size: clamp(32px, 3.6vw, 46px); letter-spacing: -0.06em; line-height: 1.4; font-weight: 650; }
+    .auth-hero .auth-description { margin: 24px 0 36px; font-size: 14px; color: var(--muted); line-height: 1.9; word-break: keep-all; }
+    .hero-points { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--line); }
+    .hero-points li { display: flex; gap: 20px; padding: 17px 0; border-bottom: 1px solid var(--line); }
+    .hero-points li > span { font: 14px/1.8 Georgia, serif; color: #a27b4e; }
+    .hero-points strong { font-size: 13px; font-weight: 600; color: var(--ink); }
+    .hero-points li p { margin: 2px 0 0; font-size: 12px; color: var(--muted); }
+    .auth-page .auth-card { padding: 32px; border-top: 3px solid var(--leaf); align-self: center; }
+    .auth-card-heading { margin-bottom: 28px; }
+    .auth-card-heading h2 { font-size: 20px; letter-spacing: -0.04em; }
+    .auth-card-heading p { font-size: 12px; color: var(--muted); margin: 8px 0 0; }
+    .auth-card .tabs { gap: 0; border-bottom: 1px solid var(--line); margin-bottom: 26px; }
+    .auth-card .tab { padding: 10px 8px 12px; border-radius: 0; background: transparent; color: var(--muted); border-bottom: 2px solid transparent; margin-bottom: -1px; font-size: 13px; }
+    .auth-card .tab.on { border-bottom-color: var(--leaf); background: transparent; color: var(--leaf); font-weight: 650; }
+    .auth-card .stack { gap: 20px; }
+    .auth-card .btn.primary { margin-top: 4px; padding: 12px; }
+
+    /* 상단 탐색 */
+    .app-header {
+      grid-template-columns: 1fr auto 1fr; min-height: 78px; padding: 0 max(24px, calc((100% - 1120px) / 2));
+      gap: 28px; background: #fffefa; border-bottom: 1px solid #dddfd5; backdrop-filter: none;
+    }
+    .app-header .logo.small { font-size: 23px; }
+    .app-header .nav-tabs { height: 78px; padding: 0; gap: 32px; border-radius: 0; background: none; align-items: stretch; }
+    .app-header .nav-tab { display: flex; align-items: center; padding: 0 3px; border-radius: 0; border-bottom: 2px solid transparent; font-size: 13px; }
+    .app-header .nav-tab.on { color: var(--leaf); background: none; border-bottom-color: var(--leaf); box-shadow: none; font-weight: 650; }
+    .app-header .header-right { gap: 20px; }
+    .app-header .today-chip { padding: 0; font-size: 12px; background: none; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+    .app-header .profile-btn { border: 0; background: none; padding: 4px 0; gap: 8px; border-radius: 4px; font-size: 12px; }
+    .app-header .profile-btn strong { max-width: 100px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+    .app-header .avatar { width: 29px; height: 29px; font-size: 15px; }
+    .app-header .popover { width: 270px; box-shadow: 0 6px 20px #2d383114; }
+
+    /* 페이지와 공부방 */
+    .page { max-width: 1168px; padding: 50px 24px 64px; gap: 28px; }
+    .page-head { align-items: center; padding-bottom: 32px; border-bottom: 1px solid var(--line); }
+    .page-head h1 { font-size: 34px; letter-spacing: -0.06em; }
+    .page-head p { font-size: 13px; margin-top: 10px; line-height: 1.7; word-break: keep-all; }
+    .rooms-toolbar { display: flex; justify-content: space-between; align-items: center; gap: 20px; }
+    .rooms-heading { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
+    .rooms-heading h2 { font-size: 15px; }
+    .room-count { font: 13px var(--font-body); color: var(--muted); }
+    .page .code-join { align-items: center; gap: 8px; }
+    .code-join label { color: var(--muted); font-size: 12px; margin-right: 6px; }
+    .page .code-input { width: 136px; min-height: 38px; padding: 8px 10px; font-size: 12px; letter-spacing: 2px; }
+    .page .code-input::placeholder { letter-spacing: 0; }
+    .page .code-join .btn { padding: 8px 12px; }
+    .page .room-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px; }
+    .page .room-card { gap: 20px; min-width: 0; padding: 24px; border-top: 2px solid #81937a; border-radius: 3px; transition: border-color 150ms; }
+    .page .room-card:hover { transform: none; border-color: #81937a; }
+    .page .room-card.full { border-top-color: #c6c9bf; }
+    .room-number { color: #969b8b; font: italic 22px Georgia, serif; }
+    .page .room-card h3 { font-size: 20px; font-weight: 600; letter-spacing: -0.04em; }
+    .room-occupancy { display: flex; justify-content: space-between; gap: 12px; align-items: center; }
+    .page .seats { gap: 6px; }
+    .page .seats i { width: 14px; height: 18px; border: 1px solid #d6dace; border-bottom-width: 3px; border-radius: 3px 3px 1px 1px; background: transparent; }
+    .page .seats i.filled { background: #7d9177; border-color: #7d9177; }
+    .seat-count { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+    .seat-count strong { font-size: 17px; color: var(--ink); font-weight: 500; }
+    .page .room-card-foot { padding-top: 17px; border-top: 1px solid #e9eae1; gap: 4px; }
+    .page .room-card-foot small { font-size: 11px; }
+    .page .room-card-foot .btn { padding: 6px 9px; font-size: 11px; }
+    .rooms-note { display: flex; align-items: center; justify-content: space-between; gap: 14px; color: var(--muted); font-size: 11px; }
+    .live-note { display: flex; align-items: center; gap: 7px; }
+    .live-note::before { content: ''; width: 5px; height: 5px; border-radius: 50%; background: #698362; flex-shrink: 0; }
+    .live-note.offline::before { background: #ac7a48; }
+    .page .empty-state { min-height: 290px; justify-content: center; border: 1px dashed #c9cfc0; background: transparent; box-shadow: none; }
+    .page .empty-state h3 { margin-top: 18px; font-size: 17px; }
+    .page .empty-state p { margin: 4px 0 18px; font-size: 13px; }
+    .empty-book { position: relative; display: block; width: 40px; height: 31px; border: 1px solid #89977d; border-radius: 3px 3px 6px 6px; transform: rotate(-7deg); }
+    .empty-book::before { content: ''; position: absolute; left: 50%; top: 0; bottom: 0; border-left: 1px solid #89977d; }
+    .empty-book::after { content: ''; position: absolute; left: 5px; right: 5px; bottom: 6px; border-bottom: 1px solid #c5cdba; }
+    .page .room-dialog { padding: 30px; border-radius: 6px; }
+    .room-dialog .stack { gap: 22px; }
+    .room-dialog .dialog-description { margin: -12px 0 2px; color: var(--muted); font-size: 12px; }
+    .page .room-dialog::backdrop { background: #202e2759; backdrop-filter: blur(3px); }
+
+    /* 플래너: 종이의 격자와 과목 색은 유지하고, 상자 장식은 덜어낸다. */
+    .page-planner .week { padding: 18px 24px; gap: 32px; }
+    .page-planner .week-day { border-width: 1px; border-radius: 3px; padding: 10px 4px; gap: 5px; }
+    .page-planner .week-day:hover { background: #f0f1e9; }
+    .page-planner .week-day.on { background: #edf0e7; border-color: #b7c3ad; }
+    .page-planner .week-bar { width: 12px; background: #eef0e7; border-radius: 2px; }
+    .page-planner .week-bar i { background: #7d9177; border-radius: 1px; }
+    .page-planner .week-day strong { font-size: 11px; font-weight: 500; }
+    .page-planner .week-day small { font-size: 11px; }
+    .page-planner .planner-grid { grid-template-columns: minmax(0, 1fr) 300px; gap: 24px; }
+    .page-planner .sheet { --grid: #68775c08; background-color: #fffefa; background-size: 20px 20px; padding: 24px; gap: 24px; }
+    .page-planner .sheet.past { background-color: #f3f3ec; }
+    .page-planner .sheet-label { color: #78806f; font-size: 10px; font-weight: 600; letter-spacing: 1px; }
+    .page-planner .hand { font-family: var(--font-body); }
+    .page-planner .hand.big { color: var(--ink); font-size: 23px; font-weight: 500; letter-spacing: -0.04em; line-height: 1.4; }
+    .page-planner .sheet-top { grid-template-columns: 1.4fr 1fr 1.2fr; gap: 0; }
+    .page-planner .sheet-box { padding: 0 16px; border: 0; border-left: 1px solid var(--line); border-radius: 0; background: transparent; gap: 8px; min-width: 0; }
+    .page-planner .sheet-box:first-child { padding-left: 0; border-left: 0; }
+    .page-planner .sheet-box:last-child { padding-right: 0; }
+    .page-planner .sheet-date .date-nav { gap: 3px; flex-wrap: wrap; }
+    .page-planner .sheet-date .date-nav .icon { font-size: 9px; padding: 4px 2px; }
+    .page-planner .sheet-date .date-nav strong { font-family: Georgia, serif; }
+    .page-planner .sheet-total .goal { font-size: 11px; flex-wrap: wrap; }
+    .page-planner .sheet-total .goal input { width: 55px; min-height: 26px; padding: 2px 6px; }
+    .page-planner .progress .bar { height: 4px; background: #e9ede3; }
+    .page-planner .progress .bar span { background: #81956f; }
+    .page-planner .sheet-memo { padding: 14px 0; border: 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); border-radius: 0; background: transparent; }
+    .page-planner .sheet-memo input { min-height: 28px; font-size: 13px; padding: 2px 4px; background: transparent; }
+    .page-planner .sheet-body { grid-template-columns: minmax(0, 1fr) 194px; gap: 24px; }
+    .page-planner .contents { gap: 18px; }
+    .page-planner .contents .empty { margin: 20px 0; font-size: 12px; line-height: 1.9; }
+    .page-planner .contents-group { grid-template-columns: 62px 1fr; }
+    .page-planner .contents-group .subject-name { font-size: 12px; }
+    .page-planner .highlight { font-size: 13px; line-height: 1.9; }
+    .page-planner .contents-group li { border-color: var(--line); }
+    .page-planner .mark { width: 23px; height: 23px; border: 1px solid #c3cbb9; border-radius: 3px; color: var(--leaf); font: 12px var(--font-body); }
+    .page-planner .contents-group li.done .mark { border-color: var(--leaf); }
+    .page-planner .tt-grid { border: 1px solid #b8c1ab; border-radius: 2px; }
+    .page-planner .tt-row { border-color: #e2e6d9; }
+    .page-planner .tt-cell { border-color: #e2e6d9; }
+    .page-planner .tt-hour { color: #7b836f; border-color: #c7cebd; font-size: 10px; }
+    .page-planner .tt-actual { background: #58714c; }
+    .page-planner .tt-brush { border-width: 1px; border-radius: 3px; font-size: 11px; }
+    .page-planner .planner { padding: 22px; }
+    .page-planner .planner-head { flex-wrap: wrap; gap: 8px; }
+    .page-planner .planner-head h2 { font-size: 15px; }
+    .page-planner .planner-head small { font-size: 10px; }
+    .page-planner .subjects { gap: 16px; }
+    .page-planner .subjects > .empty { font-size: 12px; padding: 18px 0; }
+    .page-planner .subject { border-width: 1px; border-left-width: 3px; border-radius: 3px; background: #fffefa; }
+    .page-planner .subject-toggle { font-size: 13px; }
+    .page-planner .subject-toggle small { font-size: 10px; }
+    .page-planner .task { padding: 7px 0; border-radius: 0; font-size: 12px; background: transparent; }
+    .page-planner .task input[type='checkbox'] { width: 15px; height: 15px; min-height: auto; }
+    .page-planner .chip-btn { padding: 3px 7px; border-width: 1px; border-radius: 3px; font-size: 10px; }
+    .page-planner .chip-btn.on { background: #edf0e7; }
+    .page-planner .subject-body form input { min-width: 0; font-size: 12px; }
+    .page-planner .add-subject { border-top: 1px solid var(--line); padding-top: 18px; gap: 14px; }
+    .page-planner .add-subject input { font-size: 12px; }
+    .page-planner .swatches { padding: 2px; gap: 8px; }
+    .page-planner .swatch { width: 19px; height: 19px; border-width: 2px; }
+    .page-planner .swatch.on { box-shadow: 0 0 0 2px var(--ink); }
+
+    /* 캐릭터 미리보기의 3D 코드와 무대는 유지한다. */
+    .page-character .character-layout { gap: 24px; }
+    .page-character .character-layout > * { min-width: 0; }
+    .page-character .preview-stage { min-width: 0; width: 100%; }
+    .page-character .preview-info { gap: 10px; padding-top: 8px; }
+    .page-character .preview-info .row { margin-top: 6px; }
+    .page-character .char-grid.big { gap: 10px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .page-character .char { border-width: 1px; border-radius: 4px; gap: 10px; }
+    .page-character .char.on { background: #edf0e7; border-color: #81937a; }
+    .page-character .char-grid.big .char { padding: 24px 8px 16px; }
+    .page-character .char .badge { top: 5px; right: 5px; font-size: 9px; background: var(--leaf); color: white; }
+    .page-character .char-grid.big .avatar.big { width: 48px; height: 48px; font-size: 27px; }
+
+    @media (max-width: 1080px) {
+      .auth-page { column-gap: 56px; }
+      .app-header { gap: 20px; }
+      .app-header .header-right { gap: 12px; }
+      .page .room-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .page-planner .planner-grid { grid-template-columns: minmax(0, 1fr) 280px; gap: 18px; }
+      .page-planner .sheet-body { grid-template-columns: 1fr; }
+      .page-planner .timetable { max-width: 280px; }
+    }
+    @media (max-width: 860px) {
+      .app-header { grid-template-columns: 1fr auto; min-height: 68px; padding: 14px 24px 0; gap: 12px; }
+      .app-header .nav-tabs { height: 46px; grid-row: 2; grid-column: 1 / -1; justify-self: start; }
+      .app-header .today-chip { display: none; }
+      .page { padding-top: 32px; }
+      .page-actions, .code-join { width: auto; }
+      .page-planner .planner-grid { grid-template-columns: 1fr; }
+      .page-planner .sheet-body { grid-template-columns: minmax(0, 1fr) 220px; }
+      .page-planner .timetable { max-width: none; }
+      .page-character .character-layout { grid-template-columns: 1fr; }
+      .auth-page { grid-template-columns: minmax(0, 1fr) 340px; column-gap: 32px; }
+      .auth-page .auth-card { padding: 26px; }
+      .auth-description br { display: none; }
+    }
+    @media (max-width: 640px) {
+      .auth-page { grid-template-columns: 1fr; gap: 30px; padding: 24px 24px 48px; }
+      .auth-hero { padding: 0; }
+      .auth-hero h1 { font-size: 30px; }
+      .auth-hero .auth-description { margin: 16px 0 0; }
+      .auth-hero .hero-points { display: none; }
+      .auth-page .auth-card { padding: 24px; }
+      .app-header { padding-inline: 20px; }
+      .app-header .logo.small { font-size: 21px; }
+      .app-header .profile-btn strong { max-width: 60px; }
+      .page { padding: 28px 20px 40px; gap: 22px; }
+      .page-head { padding-bottom: 24px; gap: 16px; }
+      .page-head h1 { font-size: 29px; }
+      .page-head p { font-size: 12px; }
+      .page-head .btn { padding: 9px 12px; }
+      .rooms-toolbar { flex-wrap: wrap; gap: 16px; }
+      .rooms-toolbar .page-actions, .page .code-join { width: 100%; }
+      .page .code-input { flex: 1; width: 80px; min-width: 0; }
+      .code-join label { font-size: 11px; white-space: nowrap; }
+      .page .room-grid { grid-template-columns: 1fr; gap: 14px; }
+      .page .room-card { padding: 22px; }
+      .rooms-note { align-items: flex-start; flex-direction: column; gap: 8px; }
+      .page-planner .week { padding: 16px 10px; gap: 14px; align-items: stretch; }
+      .page-planner .week > .sheet-label { padding-left: 6px; }
+      .page-planner .week-bars { gap: 2px; }
+      .page-planner .week-day { padding-inline: 0; }
+      .page-planner .week-day small { font-size: 9px; }
+      .page-planner .sheet { padding: 18px; gap: 20px; }
+      .page-planner .sheet-top { grid-template-columns: 1fr 1fr; row-gap: 20px; }
+      .page-planner .sheet-date { grid-column: 1 / -1; border-bottom: 1px solid var(--line); padding-bottom: 16px; }
+      .page-planner .sheet-dday { border-left: 0; padding-left: 0; }
+      .page-planner .sheet-total { padding-left: 18px; }
+      .page-planner .sheet-body { grid-template-columns: 1fr; }
+      .page-planner .sheet-memo { flex-wrap: wrap; gap: 4px; }
+      .page-planner .sheet-memo input { width: 100%; }
+      .page-character .card { padding: 18px; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      :is(.auth-page, .app-header, .page) * { transition: none !important; }
+    }
