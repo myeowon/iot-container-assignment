@@ -1,0 +1,108 @@
+/* 공부방: 밤 공부방 테마 (어두운 유리 패널 + 따뜻한 크림색 글자) */
+.room-screen {
+  --glass: rgba(24, 17, 13, 0.72);
+  --glass-line: rgba(255, 220, 170, 0.14);
+  --cream: #f6e7cf;
+  --cream-dim: #bda98e;
+  --amber: #f0a64a;
+  position: fixed; inset: 0; overflow: hidden;
+  background: #120d0a;
+  color: var(--cream);
+}
+.room-screen small { color: var(--cream-dim); }
+.room-screen .card {
+  background: var(--glass);
+  border: 1px solid var(--glass-line);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+  backdrop-filter: blur(8px);
+}
+.room-screen .btn { background: rgba(255, 230, 190, 0.12); color: var(--cream); box-shadow: none; border: 1px solid var(--glass-line); }
+.room-screen .btn.primary { background: var(--amber); color: #2a1a0e; border-color: var(--amber); }
+.room-screen .btn.ghost { background: transparent; }
+.room-screen .seg { background: transparent; border: 1px solid var(--glass-line); color: var(--cream); }
+.room-screen .seg.on { background: var(--amber); border-color: var(--amber); color: #2a1a0e; }
+.room-screen input, .room-screen select { background: rgba(255, 240, 220, 0.08); border: 1px solid var(--glass-line); color: var(--cream); }
+.room-screen option, .room-screen optgroup { color: #2a1a0e; }
+.room-screen .badge, .room-screen .chip { background: rgba(255, 230, 190, 0.14); color: var(--cream); }
+.room-screen .badge.private { background: rgba(240, 166, 74, 0.25); }
+
+.stage { position: absolute; inset: 0; }
+.stage canvas { display: block; }
+.label-layer { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
+.name-tag {
+  position: absolute; left: 0; top: 0; white-space: nowrap;
+  padding: 2px 10px; border-radius: 999px;
+  background: rgba(20, 14, 10, 0.72); border: 1px solid var(--glass-line);
+  font: 12px var(--font-title); color: var(--cream);
+}
+.name-tag.me { border: 2px solid var(--amber); }
+.name-tag { display: flex; flex-direction: column; align-items: center; line-height: 1.25; }
+.name-tag .plan {
+  display: flex; align-items: center; gap: 4px; max-width: 180px; overflow: hidden; text-overflow: ellipsis;
+  font: 11px var(--font-body); color: var(--cream);
+}
+.name-tag .plan .dot { width: 7px; height: 7px; }
+.name-tag.AWAY { color: #ffb4a0; }
+
+.room-top {
+  position: absolute; top: 12px; left: 16px; right: 16px;
+  display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap;
+  pointer-events: none;
+}
+.room-top > * { pointer-events: auto; }
+.room-title { display: flex; align-items: center; gap: 10px; font-family: var(--font-title); font-size: 1.3rem; text-shadow: 0 2px 8px #000; }
+
+.panel { position: absolute; top: 64px; width: 290px; max-height: calc(100% - 300px); overflow: auto; padding: 14px; }
+.panel.left { left: 16px; }
+.panel.right { right: 16px; }
+.panel.hidden { display: none; }
+.room-screen .task { background: rgba(255, 240, 220, 0.06); }
+.room-screen .progress .bar { background: rgba(255, 240, 220, 0.12); }
+.room-screen .subject-times { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+.room-screen .subject-times .chip { font: 0.75rem var(--font-body); padding: 2px 8px; }
+.room-screen .progress .bar span { background: linear-gradient(90deg, #d9883a, var(--amber)); }
+
+.members { list-style: none; margin: 10px 0 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.members li { display: flex; align-items: center; gap: 10px; }
+.members li.me strong { color: var(--amber); }
+.members li div { flex: 1; display: flex; flex-direction: column; }
+.avatar { width: 36px; height: 36px; border-radius: 50%; background: var(--c); display: grid; place-items: center; font-size: 1.2rem; }
+.dot-status { width: 10px; height: 10px; border-radius: 50%; background: #6d6157; }
+.dot-status.STUDYING { background: #8fd16a; box-shadow: 0 0 8px #8fd16a; }
+.dot-status.AWAY { background: #ff7b5c; }
+.dot-status.BREAK { background: #f0c75e; }
+
+/* 왼쪽 아래 큰 타이머 */
+.session { position: absolute; left: 28px; bottom: 22px; pointer-events: none; text-shadow: 0 2px 12px rgba(0, 0, 0, 0.7); }
+.session-label { display: flex; align-items: center; gap: 8px; font-size: 1.05rem; letter-spacing: 2px; opacity: 0.9; }
+.timer { font-family: var(--font-title); font-size: 4.2rem; line-height: 1; letter-spacing: 2px; font-variant-numeric: tabular-nums; color: #fff8ec; }
+.status-pill { font-family: var(--font-title); font-size: 0.8rem; letter-spacing: 0; padding: 2px 10px; border-radius: 999px; background: rgba(255, 240, 220, 0.14); }
+.status-pill.STUDYING { background: rgba(143, 209, 106, 0.25); color: #c9f0ad; }
+.status-pill.AWAY { background: rgba(255, 123, 92, 0.25); color: #ffc2b0; }
+.status-pill.BREAK { background: rgba(240, 199, 94, 0.25); color: #ffe39a; }
+
+.dock {
+  position: absolute; right: 16px; bottom: 16px;
+  display: flex; align-items: center; gap: 16px; padding: 12px 16px; max-width: calc(100% - 380px);
+  flex-wrap: wrap; justify-content: flex-end;
+}
+.dock-subject { display: flex; flex-direction: column; gap: 2px; min-width: 150px; }
+.controls { display: flex; flex-direction: column; gap: 6px; align-items: center; }
+.controls .mode .seg { padding: 3px 10px; font-size: 0.85rem; }
+.camera { position: relative; display: flex; align-items: center; }
+.camera video { width: 112px; height: 84px; object-fit: cover; border-radius: 12px; transform: scaleX(-1); border: 2px solid var(--glass-line); }
+.camera .led { position: absolute; top: 6px; right: 6px; width: 12px; height: 12px; border-radius: 50%; background: #6d6157; border: 2px solid #fff; }
+.camera.detected .led { background: #4caf50; }
+.camera.detected video { border-color: #8fd16a; }
+
+@media (max-width: 860px) {
+  .room-screen { overflow: auto; display: flex; flex-direction: column; }
+  .room-screen > * { flex: none; }
+  .room-top { order: -1; position: static; padding: 12px 16px 0; }
+  .stage { position: relative; height: 46vh; }
+  .session { position: absolute; top: calc(46vh + 20px); left: 24px; bottom: auto; }
+  .timer { font-size: 2.6rem; }
+  .name-tag { font-size: 10px; padding: 1px 7px; }
+  .panel { position: static; width: auto; max-height: none; margin: 8px 16px; }
+  .dock { position: static; margin: 8px 16px 16px; max-width: none; justify-content: center; }
+}
