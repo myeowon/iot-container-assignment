@@ -2117,6 +2117,9 @@ data:
       .timer { font-size: 2.2rem; }
     }
     @media (max-width: 560px) {
+      /* 상단 버튼은 항상 둘째 줄에 두고, 패널은 그 아래에서 시작해 버튼을 가리지 않는다 */
+      .room-tools { flex-basis: 100%; }
+      .panel { top: 108px; max-height: calc(100% - 108px - 270px); }
       .room-bottom > .dock { flex: 1 1 100%; }
       .controls { width: 100%; }
     }
