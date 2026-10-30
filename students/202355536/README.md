@@ -40,9 +40,9 @@
 |---|---|---|---|
 | ![새벽](images/time-dawn.png) | ![낮](images/time-day.png) | ![노을](images/time-sunset.png) | ![밤](images/time-night.png) |
 
-| 플래너 | 플래너 시간표 | 캐릭터 | 공부방 목록 |
+| 로그인 | 공부방 목록 | 플래너 | 캐릭터 |
 |---|---|---|---|
-| ![플래너](images/planner.png) | ![시간표](images/planner-timetable.png) | ![캐릭터](images/character.png) | ![공부방 목록](images/rooms.png) |
+| ![로그인](images/login.png) | ![공부방 목록](images/rooms.png) | ![플래너](images/planner.png) | ![캐릭터](images/character.png) |
 
 ---
 
